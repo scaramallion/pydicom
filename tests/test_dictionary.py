@@ -7,7 +7,8 @@
 
 import unittest
 from pydicom.tag import Tag
-from pydicom.datadict import CleanName, all_names_for_tag, dictionary_description
+from pydicom.datadict import (CleanName, all_names_for_tag, 
+                              dictionary_description, get_entry)
 
 
 class DictTests(unittest.TestCase):
@@ -33,6 +34,23 @@ class DictTests(unittest.TestCase):
         """dicom_dictionary: Tags with "x" return correct dict info........"""
         self.assertEqual(dictionary_description(0x280400), 'Transform Label')
         self.assertEqual(dictionary_description(0x280410), 'Rows For Nth Order Coefficients')
+
+    def test_get_entry_main(self):
+        """Test get_entry returns the correct tuple for normal tags."""
+        tag = 0x00100010 # PatientName
+        entry = get_entry(tag)
+        self.assertEqual(entry[4], 'PatientName')
+    
+    def test_get_entry_raises(self):
+        """Test get_entry raises KeyError if tag not found."""
+        tag = 0x00110010
+        self.assertRaises(KeyError, get_entry, tag)
+
+    def test_get_entry_repeaters(self):
+        """Test get_entry returns the correct tuple for repeater tags."""
+        tag = 0x60000010 # OverlayRows
+        entry = get_entry(tag)
+        self.assertEqual(entry[4], 'OverlayRows')
 
 
 class PrivateDictTests(unittest.TestCase):

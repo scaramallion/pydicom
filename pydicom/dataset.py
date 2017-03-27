@@ -28,7 +28,8 @@ import sys
 from pydicom import compat
 from pydicom.charset import default_encoding, convert_encodings
 from pydicom.datadict import dictionaryVR
-from pydicom.datadict import tag_for_name, all_names_for_tag
+from pydicom.datadict import (tag_for_name, all_names_for_tag,
+                              repeater_tag_for_name)
 from pydicom.tag import Tag, BaseTag
 from pydicom.dataelem import DataElement, DataElement_from_raw, RawDataElement
 from pydicom.uid import NotCompressedPixelTransferSyntaxes, UncompressedPixelTransferSyntaxes
@@ -618,6 +619,15 @@ class Dataset(dict):
     def __ne__(self, other):
         """Compare `self` and `other` for inequality."""
         return not (self == other)
+
+    @property
+    def OverlaySequence(self):
+        overlay_groups = range(0x6000, 0x601F, 2)
+        overlay_ds = [self.group_dataset(group) for group in overlay_groups]
+        # Remove empty datasets
+        overlay_ds = [ds for ds in overlay_ds if ds != Dataset()]
+        overlay_sq = [RepeaterDataset(ds, self) for ds in overlay_ds]
+        return overlay_sq
 
     def _pixel_data_numpy(self):
         """If NumPy is available, return an ndarray of the Pixel Data.
@@ -1349,3 +1359,165 @@ class FileDataset(Dataset):
         if stat_available and self.filename and os.path.exists(self.filename):
             statinfo = os.stat(self.filename)
             self.timestamp = statinfo.st_mtime
+
+
+class RepeaterDataset(Dataset):
+    """A dummy Dataset used for easier access to repeating group elements.
+
+    The only non-retired repeating group elements are all (60xx,eeee).
+
+    Parameters
+    ----------
+    ds : pydicom.dataset.Dataset
+        A Dataset containing only elements from the same repeater group, i.e.
+        (6002,eeee).
+    """
+    def __init__(self, ds, parent):
+        # Check that the dataset is a repeater group and only contains elements
+        #   from the same group
+        # Grab the first element to use as a check
+        elem = next(ds.iterall())
+        if ds.group_dataset(elem.tag.group) != ds:
+            raise ValueError("All the elements in RepeaterDataset must be of "
+                               "the same group.")
+        if elem.tag.group not in range(0x6000, 0x601F, 2):
+            raise ValueError("The elements in RepeaterDataset must belong to "
+                               "60xx group.")
+
+        Dataset.__init__(self, ds)
+        self.parent = parent
+        self.repeater_group = elem.tag.group
+
+    def __contains__(self, name):
+        """Extend dict.__contains__() to handle DICOM keywords.
+
+        This is called for code like:
+        >>> 'SliceLocation' in ds
+        True
+
+        Parameters
+        ----------
+        name : str or int or 2-tuple
+            The Element keyword or tag to search for.
+
+        Returns
+        -------
+        bool
+            True if the DataElement is in the Dataset, False otherwise.
+        """
+        if isinstance(name, (str, compat.text_type)):
+            tag = repeater_tag_for_name(name)
+            tag_elem = int(tag[4:], 16)
+            tag = Tag(self.repeater_group, tag_elem)
+        else:
+            try:
+                tag = Tag(name)
+            except:
+                return False
+
+        if tag:
+            return dict.__contains__(self, tag)
+        else:
+            return dict.__contains__(self, name)  # will no doubt raise an exception
+
+    def __getattr__(self, name):
+        """Intercept requests for Dataset attribute names.
+
+        If `name` matches a DICOM keyword, return the value for the
+        DataElement with the corresponding tag.
+
+        Parameters
+        ----------
+        name
+            A DataElement keyword or tag or a class attribute name.
+
+        Returns
+        -------
+        value
+              If `name` matches a DICOM keyword, returns the corresponding
+              DataElement's value. Otherwise returns the class attribute's value
+              (if present).
+        """
+        try:
+            tag = repeater_tag_for_name(name)
+            if tag is None: # `name` isn't a DICOM repeater element keyword
+                raise AttributeError
+            
+            tag_elem = int(tag[4:], 16)
+            tag = Tag(self.repeater_group, tag_elem)
+            if tag not in self: # DICOM DataElement not in the Dataset
+                raise AttributeError
+            else:
+                return self.parent[tag].value
+        except AttributeError:
+            # Try the base class attribute getter
+            return super(Dataset, self).__getattribute__(name)
+
+    def __setattr__(self, name, value):
+        """Intercept any attempts to set a value for an instance attribute.
+
+        ds.ElementKeyword = value
+        
+        If `name` is a DICOM keyword then it must be for an element in the same
+        Repeaters Group as the other elements.
+
+        Parameters
+        ----------
+        name : str
+            The element keyword for the DataElement you wish to add/change. If
+            `name` is not a DICOM element keyword then this will be the
+            name of the attribute to be added/changed.
+        value
+            The value for the attribute to be added/changed.
+        """
+        tag = repeater_tag_for_name(name)
+        # If the keyword belongs to a Repeater Group element
+        if tag is not None:
+            tag = (self.repeater_group, int(tag[4:], 16))
+            # If the DataElement isn't present in the dataset then add it
+            if tag not in self.parent:
+                VR = dictionaryVR(tag)
+                elem = DataElement(tag, VR, value)
+            else:
+                elem = self.parent[tag]
+                elem.value = value
+
+            self.parent[tag] = elem
+            self[tag] = self.parent[tag]
+        elif tag_for_name(name) is not None:
+            raise ValueError('Only Repeating Group elements in the '
+                             '({0:04x},eeee) group can be added to the current'
+                             'Overlay Sequence item.'.format(self.repeater_group))
+        else:
+            super(Dataset, self).__setattr__(name, value)
+
+    def __delattr__(self, name):
+        """Intercept requests to delete an attribute by `name`.
+
+        If `name` is a DICOM keyword:
+            Delete the corresponding DataElement from the Dataset.
+            >>> del ds.PatientName
+        Else:
+            Delete the class attribute as any other class would do.
+            >>> del ds._is_some_attribute
+
+        Parameters
+        ----------
+        name : str
+            The keyword for the DICOM element or the class attribute to delete.
+        """
+        # First check if a valid DICOM keyword and if we have that data element
+        tag = repeater_tag_for_name(name)
+        tag_elem = int(tag[4:], 16)
+        tag = Tag(self.repeater_group, tag_elem)
+        if tag is not None and tag in self:
+            dict.__delitem__(self, tag)  # direct to dict as we know we have key
+            self.parent.__delitem__(tag)
+        # If not a DICOM name in this dataset, check for regular instance name
+        #   can't do delete directly, that will call __delattr__ again
+        elif name in self.__dict__:
+            del self.__dict__[name]
+        # Not found, raise an error in same style as python does
+        else:
+            raise AttributeError("'RepeaterDataset' object has no attribute "
+                                 "'{0}'".format(name))

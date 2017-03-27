@@ -45,10 +45,26 @@ def mask_match(tag):
 
 
 def get_entry(tag):
-    """Return the tuple (VR, VM, name, is_retired, keyword) from the DICOM dictionary
+    """Return the element data from the main/repeater dictionary for `tag`.
 
-    If the entry is not in the main dictionary, check the masked ones,
-    e.g. repeating groups like 50xx, etc.
+    Searches the main dictionary then the repeater dictionary.
+
+    Parameters
+    ----------
+    tag : int
+        A main dictionary element `tag`, i.e. 0x00100010, or a repeaters
+        dictionary element tag, i.e. '60xx0010' becomes 0x60000010
+
+    Returns
+    -------
+    tuple
+        The (VR, VM, name, is_retired, keyword) values for the corresponding
+        element.
+
+    Raises
+    ------
+    KeyError
+        If the `tag` doesn't correspond to a main or repeater element.
     """
     tag = Tag(tag)
     try:
@@ -78,7 +94,7 @@ def dictionaryVR(tag):
 
 def dictionary_has_tag(tag):
     """Return True if the dicom dictionary has an entry for the given tag."""
-    return (tag in DicomDictionary)
+    return (tag in DicomDictionary or mask_match(tag) in RepeatersDictionary)
 
 
 def dictionary_keyword(tag):
@@ -186,6 +202,7 @@ def tag_for_name(name):
     """Return the dicom tag corresponding to name, or None if none exist."""
     if name in keyword_dict:  # the usual case
         return keyword_dict[name]
+
     # If not an official keyword, check the old style pydicom names
     if name in NameDict:
         tag = NameDict[name]
@@ -200,7 +217,6 @@ def tag_for_name(name):
         return NameDict.get(longname, None)
     return None
 
-
 def all_names_for_tag(tag):
     """Return a list of all (long and short) names for the tag"""
     longname = keyword_for_tag(tag)
@@ -209,6 +225,58 @@ def all_names_for_tag(tag):
     if shortname:
         names.append(shortname)
     return names
+
+
+# REPEATER ELEMENTS
+def get_repeater_entry(tag):
+    """Return the element data from the repeater dictionary for `tag`.
+
+    Searches the main dictionary then the repeater dictionary.
+
+    Parameters
+    ----------
+    tag : str
+        A repeater dictionary element tag, i.e. '60xx0010', '002804x0', etc.
+
+    Returns
+    -------
+    tuple
+        The (VR, VM, name, is_retired, keyword) values for the corresponding
+        element.
+
+    Raises
+    ------
+    KeyError
+        If the `tag` doesn't correspond to a repeater element.
+    """
+    return RepeatersDictionary[tag]
+
+repeater_keyword_dict = dict([(get_repeater_entry(tag)[4], tag) for tag in RepeatersDictionary])
+
+def repeater_tag_for_name(keyword):
+    """Return the DICOM repeating group element tag corresponding to `keyword`.
+
+    Only searches amongst the Repeating Group elements, i.e. (60xx,eeee).
+
+    Parameters
+    ----------
+    keyword : str
+        The DICOM element keyword corresponding to the tag you wish to get.
+        
+    Returns
+    -------
+    int or None
+        The tag value corresponding to `keyword` or None if no such keyword
+        exists. Note that the tag's group value will be set to the first
+        available repeater tag (i.e. `keyword` OverlayRows will return 
+        0x60000010 rather than '60xx0010').
+    """
+    if keyword in repeater_keyword_dict:
+        return repeater_keyword_dict[keyword]
+
+    return None
+
+
 
 
 # PRIVATE DICTIONARY handling

@@ -622,12 +622,88 @@ class Dataset(dict):
 
     @property
     def OverlaySequence(self):
-        overlay_groups = range(0x6000, 0x601F, 2)
-        overlay_ds = [self.group_dataset(group) for group in overlay_groups]
-        # Remove empty datasets
-        overlay_ds = [ds for ds in overlay_ds if ds != Dataset()]
-        overlay_sq = [RepeaterDataset(ds, self) for ds in overlay_ds]
-        return overlay_sq
+        """A dummy element to make handling overlay data (60xx,eeee) easier.
+
+        Repeating Group elements such as (60xx,eeee) can be thought of as an
+        early analogy to Sequences. Overlay repeating groups are even integers
+        in the range 0x6000 to 0x601F.
+
+        Any changes made to the OverlayDatasets in the OverlaySequence will be
+        reflected in the Dataset.
+
+        Although this property uses the same name convention as a DICOM
+        Data Element keyword, it is a convenience only and is not an element,
+        not is it in the Dataset dict.
+
+        Examples
+        --------
+        Get the repeating group of the overlay elements
+        >>> print('{0:04x}'.format(ds.OverlaySequence[0].group))
+        6000
+
+        Get and update an overlay element value
+        >>> ds[0x60000010].value
+        192
+        >>> ds.OverlaySequence[0].OverlayRows
+        192
+        >>> ds.OverlaySequence[0].OverlayRows = 50
+        >>> ds.OverlaySequence[0].OverlayRows
+        50
+        >>> ds[0x60000010].value
+        50
+
+        Add a new overlay element
+        >>> 0x60000045 in ds
+        False
+        >>> ds.OverlaySequence[0].OverlaySubtype = 'G'
+        >>> 0x60000045 in ds
+        True
+        >>> ds[0x60000045].value
+        'G'
+
+        Delete an overlay element
+        >>> 0x60000010 in ds
+        True
+        >>> del ds.OverlaySequence[0].OverlayRows
+        >>> 0x60000010 in ds
+        False
+
+        Delete all the overlay elements in a group
+        >>> len(ds.group_dataset(0x6000))
+        10
+        >>> del ds.OverlaySequence[0]
+        >>> ds.group_dataset(0x6000) == {}
+        True
+
+        Get the a numpy ndarray containing the OverlayData (if present)
+        >>> arr = ds.OverlaySequence[0].overlay_array
+        >>> arr.shape
+        (192, 192)
+
+        Returns
+        -------
+        list of pydicom.dataset.OverlayDataset
+            Each item in the list will be an OverlayDataset object containing
+            then elements from each of the 60xx groups in the Dataset.
+
+        Raises
+        ------
+        AttributeError
+            If no overlay elements are present in the Dataset.
+        """
+        # All possible overlay element tag group numbers
+        all_groups = range(0x6000, 0x601F, 2)
+        # Unique overlay element tag group numbers
+        tags = [tag.group for tag in self.keys() if tag.group in all_groups]
+        unique_groups = list(set(tags))
+        # Create the list of OverlayDatasets
+        overlay_sq = [OverlayDataset(self, group) for group in unique_groups]
+
+        if overlay_sq:
+            return overlay_sq
+
+        # Use AttributeError to be consistent with a missing Element
+        raise AttributeError('Dataset has no (60xx,eeee) overlay elements.')
 
     def _pixel_data_numpy(self):
         """If NumPy is available, return an ndarray of the Pixel Data.
@@ -1361,70 +1437,149 @@ class FileDataset(Dataset):
             self.timestamp = statinfo.st_mtime
 
 
-class RepeaterDataset(Dataset):
-    """A dummy Dataset used for easier access to repeating group elements.
+class OverlayDataset(Dataset):
+    """A dummy Dataset used for easier access to 60xx repeating group elements.
 
-    The only non-retired repeating group elements are all (60xx,eeee).
+    Any changes to the Overlay dataset will be applied to the original dataset.
+    For example, if you update or delete or add an element in the OverlayDataset
+    the same change will be applied to the original Dataset.
 
-    Parameters
+    Only overlay elements of the same group as those already in the
+    OverlayDataset can be added.
+
+    Attributes
     ----------
-    ds : pydicom.dataset.Dataset
-        A Dataset containing only elements from the same repeater group, i.e.
-        (6002,eeee).
+    group : int
+        The repeating group number of the elements in the dataset.
     """
-    def __init__(self, ds, parent):
-        # Check that the dataset is a repeater group and only contains elements
-        #   from the same group
-        # Grab the first element to use as a check
-        elem = next(ds.iterall())
-        if ds.group_dataset(elem.tag.group) != ds:
-            raise ValueError("All the elements in RepeaterDataset must be of "
-                               "the same group.")
-        if elem.tag.group not in range(0x6000, 0x601F, 2):
-            raise ValueError("The elements in RepeaterDataset must belong to "
-                               "60xx group.")
+    def __init__(self, ds, group):
+        """Create a new OverlayDataset.
 
-        Dataset.__init__(self, ds)
-        self.parent = parent
-        self.repeater_group = elem.tag.group
+        Parameters
+        ----------
+        ds : pydicom.dataset.Dataset
+            The original dataset containing the overlay elements.
+        group : int
+            The overlay tag group to use, e.g. 0x601A. Must be an even number in
+            the range 0x6000 to 0x601F.
+        """
+        if group not in range(0x6000, 0x601F, 2):
+            raise ValueError('Invalid group for overlay elements')
+        self.group = group
+        self._parent = ds
+        Dataset.__init__(self, ds.group_dataset(group))
 
     def __contains__(self, name):
-        """Extend dict.__contains__() to handle DICOM keywords.
+        """Returns bool if `name` is in the class dict.
 
-        This is called for code like:
-        >>> 'SliceLocation' in ds
+        Examples
+        --------
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> 'OverlayData' in overlay_dataset
+        True
+        >>> 0x60003000 in overlay_dataset
         True
 
         Parameters
         ----------
         name : str or int or 2-tuple
-            The Element keyword or tag to search for.
+            The Element keyword or tag, or the class attribute name to check
+            for. If `name` is a DICOM element tag then it can be in any of the
+            forms accepted by the pydicom.tag.Tag function.
 
         Returns
         -------
         bool
-            True if the DataElement is in the Dataset, False otherwise.
+            True if 'name' is a keyword or tag and is in the dataset, True if
+            `name` is a class attribute and is present, False otherwise.
         """
+        # `name` is the DICOM element keyword
         if isinstance(name, (str, compat.text_type)):
             tag = repeater_tag_for_name(name)
-            tag_elem = int(tag[4:], 16)
-            tag = Tag(self.repeater_group, tag_elem)
+            tag = Tag(self.group, int(tag[4:], 16))
+        # `name` is the DICOM element tag
         else:
             try:
                 tag = Tag(name)
-            except:
+            except (ValueError, OverflowError):
                 return False
 
         if tag:
             return dict.__contains__(self, tag)
+
+        # If `name` isn't a keyword or tag, try the base class
+        return super(OverlayDataset, self).__contains__(name)
+
+    def __del__(self):
+        """When the class is deleted, delete its elements from the original dataset."""
+        for elem in self:
+            self.__delattr__(elem.keyword)
+
+    def __delattr__(self, name):
+        """Intercept requests to delete an attribute by `name`.
+
+        Examples
+        --------
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> del overlay_dataset.OverlayRows
+        >>> 'OverlayRows' in overlay_dataset
+        False
+
+        If `name` is a DICOM keyword:
+            Delete the corresponding DataElement from the Dataset.
+            >>> del ds.PatientName
+        Else:
+            Delete the class attribute as any other class would do.
+            >>> del ds._is_some_attribute
+
+        Parameters
+        ----------
+        name : str
+            The keyword for the DICOM element or the class attribute to delete.
+        """
+        # First check if a valid DICOM keyword and if we have that data element
+        tag = repeater_tag_for_name(name)
+        tag_elem = int(tag[4:], 16)
+        tag = Tag(self.group, tag_elem)
+        if tag is not None and tag in self:
+            dict.__delitem__(self, tag)  # direct to dict as we know we have key
+            self._parent.__delitem__(tag)
+        # If not a DICOM name in this dataset, check for regular instance name
+        #   can't do delete directly, that will call __delattr__ again
+        elif name in self.__dict__:
+            del self.__dict__[name]
+        # Not found, raise an error in same style as python does
         else:
-            return dict.__contains__(self, name)  # will no doubt raise an exception
+            raise AttributeError("'RepeaterDataset' object has no attribute "
+                                 "'{0}'".format(name))
+
+    def __delitem__(self, tag):
+        """Delete an item from the dict using the DICOM tag.
+
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> del overlay_dataset[0x60000010]
+        >>> 'OverlayRows' in overlay_dataset
+        False
+
+        Parameters
+        ----------
+        tag : int or pydicom.tag.Tag
+            The tag for the DataElement to be deleted.
+        """
+        super(OverlayDataset, self).__delitem__(tag)
+        self._parent.__delitem__(tag)
 
     def __getattr__(self, name):
         """Intercept requests for Dataset attribute names.
 
         If `name` matches a DICOM keyword, return the value for the
         DataElement with the corresponding tag.
+
+        Examples
+        --------
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> overlay_dataset.OverlayRows
+        192
 
         Parameters
         ----------
@@ -1444,22 +1599,29 @@ class RepeaterDataset(Dataset):
                 raise AttributeError
             
             tag_elem = int(tag[4:], 16)
-            tag = Tag(self.repeater_group, tag_elem)
+            tag = Tag(self.group, tag_elem)
             if tag not in self: # DICOM DataElement not in the Dataset
                 raise AttributeError
             else:
-                return self.parent[tag].value
+                return self._parent[tag].value
         except AttributeError:
             # Try the base class attribute getter
-            return super(Dataset, self).__getattribute__(name)
+            return super(OverlayDataset, self).__getattribute__(name)
 
     def __setattr__(self, name, value):
         """Intercept any attempts to set a value for an instance attribute.
 
-        ds.ElementKeyword = value
-        
+        Examples
+        --------
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> overlay_dataset.OverlayRows
+        192
+        >>> overlay_dataset.OverlayRows = 555
+        >>> overlay_dataset.OverlayRows
+        555
+
         If `name` is a DICOM keyword then it must be for an element in the same
-        Repeaters Group as the other elements.
+        Repeaters Group as the other elements in the OverlayDataset.
 
         Parameters
         ----------
@@ -1473,51 +1635,122 @@ class RepeaterDataset(Dataset):
         tag = repeater_tag_for_name(name)
         # If the keyword belongs to a Repeater Group element
         if tag is not None:
-            tag = (self.repeater_group, int(tag[4:], 16))
+            tag = (self.group, int(tag[4:], 16))
             # If the DataElement isn't present in the dataset then add it
-            if tag not in self.parent:
+            if tag not in self._parent:
                 VR = dictionaryVR(tag)
                 elem = DataElement(tag, VR, value)
             else:
-                elem = self.parent[tag]
+                elem = self._parent[tag]
                 elem.value = value
 
-            self.parent[tag] = elem
-            self[tag] = self.parent[tag]
+            self._parent[tag] = elem
+            self[tag] = self._parent[tag]
         elif tag_for_name(name) is not None:
             raise ValueError('Only Repeating Group elements in the '
                              '({0:04x},eeee) group can be added to the current'
-                             'Overlay Sequence item.'.format(self.repeater_group))
+                             'Overlay Sequence item.'.format(self.group))
         else:
             super(Dataset, self).__setattr__(name, value)
 
-    def __delattr__(self, name):
-        """Intercept requests to delete an attribute by `name`.
+    def __setitem__(self, key, value):
+        """Operator for Dataset[key] = value.
 
-        If `name` is a DICOM keyword:
-            Delete the corresponding DataElement from the Dataset.
-            >>> del ds.PatientName
-        Else:
-            Delete the class attribute as any other class would do.
-            >>> del ds._is_some_attribute
+        Examples
+        --------
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> overlay_dataset[0x60000045] = DataElement(0x60000045, 'LO', 'G')
+
+        Parameters
+        ----------
+        key : int
+            The tag for the element to be added to the Dataset.
+        value : pydicom.dataelem.DataElement
+            The element to add to the Dataset.
+
+        Raises
+        ------
+        TypeError
+            If value is not a pydicom.dataelem.DataElement
+        ValueError
+            If the `key` value doesn't match DataElement.tag or the tag group
+            doesn't match OverlayDataset.group.
+        """
+        if not isinstance(value, DataElement):
+            raise TypeError("Dataset contents must be DataElement instances.")
+
+        tag = Tag(value.tag)
+        key_tag = Tag(key)
+        if key_tag != tag or key_tag.group != self.group:
+            raise ValueError("The dictionary key must match the "
+                             "DataElement.tag and must be in the 0x{0:04x} "
+                             "group".format(self.group))
+
+        super(OverlayDataset, self).__setitem__(tag, value)
+        self._parent.__setitem__(tag, value)
+
+    def data_element(self, keyword):
+        """Return the DataElement corresponding to the element keyword `name`.
 
         Parameters
         ----------
         name : str
-            The keyword for the DICOM element or the class attribute to delete.
+            A DICOM element keyword.
+
+        Returns
+        -------
+        pydicom.dataelem.DataElement or None
+            For the given DICOM element `keyword`, return the corresponding
+            Dataset DataElement if present, None otherwise.
         """
-        # First check if a valid DICOM keyword and if we have that data element
-        tag = repeater_tag_for_name(name)
-        tag_elem = int(tag[4:], 16)
-        tag = Tag(self.repeater_group, tag_elem)
-        if tag is not None and tag in self:
-            dict.__delitem__(self, tag)  # direct to dict as we know we have key
-            self.parent.__delitem__(tag)
-        # If not a DICOM name in this dataset, check for regular instance name
-        #   can't do delete directly, that will call __delattr__ again
-        elif name in self.__dict__:
-            del self.__dict__[name]
-        # Not found, raise an error in same style as python does
+        tag = repeater_tag_for_name(keyword)
+        if tag:
+            tag_elem = int(tag[4:], 16)
+            tag = Tag(self.group, tag_elem)
+            return self[tag]
+        return None
+
+    def get(self, key, default=None):
+        """Extend dict.get() to handle DICOM DataElement keywords.
+
+        Parameters
+        ----------
+        key : str or pydicom.tag.Tag
+            The element keyword or Tag or the class attribute name to get.
+        default : obj or None
+            If the DataElement or class attribute is not present, return
+            `default` (default None).
+
+        Returns
+        -------
+        value
+            If `key` is the keyword for a DataElement in the Dataset then return
+            the DataElement's value.
+        pydicom.dataelem.DataElement
+            If `key` is a tag for a DataElement in the Dataset then return the
+            DataElement instance.
+        value
+            If `key` is a class attribute then return its value.
+        """
+        if isinstance(key, (str, compat.text_type)):
+            try:
+                return getattr(self, key)
+            except AttributeError:
+                return default
         else:
-            raise AttributeError("'RepeaterDataset' object has no attribute "
-                                 "'{0}'".format(name))
+            # is not a string, try to make it into a tag and then hand it
+            # off to the underlying dict
+            if not isinstance(key, BaseTag):
+                try:
+                    key = Tag(key)
+                except:
+                    raise TypeError("Dataset.get key must be a string or tag")
+        try:
+            return_val = self.__getitem__(key)
+        except KeyError:
+            return_val = default
+        return return_val
+
+    @property
+    def overlay_array(self):
+        pass

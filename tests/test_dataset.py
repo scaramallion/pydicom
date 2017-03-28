@@ -8,7 +8,7 @@
 import os
 import unittest
 
-from pydicom.dataset import Dataset, PropertyError, RepeaterDataset
+from pydicom.dataset import Dataset, PropertyError, OverlayDataset
 from pydicom.dataelem import DataElement, RawDataElement
 from pydicom.dicomio import read_file
 from pydicom.tag import Tag
@@ -522,8 +522,8 @@ class FileDatasetTests(unittest.TestCase):
         self.assertFalse(d == e)
 
 
-class TestRepeaterDataset(unittest.TestCase):
-    """Test the RepeaterDataset"""
+class TestOverlayDataset(unittest.TestCase):
+    """Test the OverlayDataset class."""
     def setUp(self):
         test_dir = os.path.dirname(__file__)
         test_file = os.path.join(test_dir, 'test_files', 'MR_overlay.dcm')
@@ -535,52 +535,58 @@ class TestRepeaterDataset(unittest.TestCase):
 
         self.ds.update(dict([(elem.tag, elem) for _, elem in overlay_ds.items()]))
 
-    def test_repeater_bad_ds(self):
+    def test_bad_ds(self):
         """Test RepeaterDataset init raises when ds is bad group."""
         ds = Dataset()
         ds.PatientName = 'Test'
-        self.assertRaises(ValueError, RepeaterDataset, ds)
+        self.assertRaises(ValueError, OverlayDataset, ds, 0x0010)
 
-    def test_repeater_bad_ds(self):
-        """Test RepeaterDataset init raises when ds is mixed group."""
-        ds = Dataset()
-        ds[0x60000010] = DataElement(0x60000010, 'US', 5)
-        ds[0x60020010] = DataElement(0x60020010, 'US', 5)
-        self.assertRaises(ValueError, RepeaterDataset, ds, ds)
-
-        ds = Dataset()
-        ds[0x60010010] = DataElement(0x60010010, 'US', 5)
-        self.assertRaises(ValueError, RepeaterDataset, ds, ds)
-
-    def test_dataset_overlay_seq(self):
+    def test_overlay_seq(self):
         """Test the Dataset.OverlaySequence returns a list of RepeaterDatasets."""
         overlays = self.ds.OverlaySequence
         self.assertTrue(isinstance(overlays, list))
-        self.assertTrue(isinstance(overlays[0], RepeaterDataset))
-        self.assertTrue(isinstance(overlays[1], RepeaterDataset))
+        self.assertTrue(isinstance(overlays[0], OverlayDataset))
+        self.assertTrue(isinstance(overlays[1], OverlayDataset))
         self.assertEqual(len(overlays), 2)
 
-    def test_repeater_getattr(self):
+    def test_contains(self):
+        """Test the __contains__ override"""
+        overlays = self.ds.OverlaySequence
+        self.assertTrue(0x60000010 in self.ds)
+        self.assertTrue(0x60000010 in overlays[0])
+        self.assertTrue('OverlayRows' in overlays[0])
+
+    def test_getattr(self):
         """Test the __getattr__ override retrieves data using keywords."""
         overlays = self.ds.OverlaySequence
         self.assertEqual(overlays[0].OverlayRows, 192)
         self.assertEqual(overlays[1].OverlayRows, 192)
 
-    def test_repeater_getattr_raises_bad_tag(self):
+    def test_getattr_raises_bad_tag(self):
         """Test the __getattr__ raises AttributeError if tag not repeater."""
         overlays = self.ds.OverlaySequence
         def test():
             overlays[0].Rows
         self.assertRaises(AttributeError, test)
 
-    def test_repeater_getattr_raises_missing_elem(self):
+    def test_getattr_raises_missing_elem(self):
         """Test the __getattr__ raises AttributeError if elem not in dataset."""
         overlays = self.ds.OverlaySequence
         def test():
             overlays[0].OverlaySubtype
         self.assertRaises(AttributeError, test)
 
-    def test_repeater_setattr_update_existing_elem(self):
+    def test_getitem(self):
+        """Test __getitem__ retrieves data using tags."""
+        overlays = self.ds.OverlaySequence
+        self.assertEqual(overlays[0][0x60000010].value, 192)
+        self.assertEqual(overlays[1][0x601E0010].value, 192)
+
+        def test():
+            overlays[0][0x601E0010]
+        self.assertRaises(KeyError, test)
+
+    def test_setattr_update_existing_elem(self):
         """Test the __setattr__ updates an existing element value."""
         self.assertEqual(self.ds[0x60000010].value, 192)
         overlays = self.ds.OverlaySequence
@@ -590,7 +596,7 @@ class TestRepeaterDataset(unittest.TestCase):
         self.assertEqual(self.ds[0x601E0010].value, 192)
         self.assertEqual(overlays[1].OverlayRows, 192)
 
-    def test_repeater_setattr_add_new_repeater_elem(self):
+    def test_setattr_add_new_repeater_elem(self):
         """Test the __setattr__ adds an new repeater element."""
         def test():
             self.ds[0x60000045]
@@ -601,7 +607,7 @@ class TestRepeaterDataset(unittest.TestCase):
         self.assertEqual(self.ds[0x60000045].value, 'G')
         self.assertRaises(KeyError, test)
 
-    def test_repeater_setattr_add_new_elem(self):
+    def test_setattr_add_new_elem(self):
         """Test the __setattr__ adds an new repeater element."""
         overlays = self.ds.OverlaySequence
         def test():
@@ -609,15 +615,61 @@ class TestRepeaterDataset(unittest.TestCase):
         self.assertRaises(ValueError, test)
         self.assertFalse('ScanType' in self.ds)
 
-    def test_repeater_delattr(self):
+    def test_setitem(self):
+        """Test __setitem__ sets data using tags."""
+        overlays = self.ds.OverlaySequence
+        overlays[0][0x60000045] = DataElement(0x60000045, 'LO', 'G')
+        self.assertEqual(overlays[0].OverlaySubtype, 'G')
+        self.assertEqual(self.ds[0x60000045].value, 'G')
+
+    def test_setitem_bad_tag(self):
+        """Test __setitem__ sets data using tags."""
+        overlays = self.ds.OverlaySequence
+        def test_group_mismatch():
+            overlays[0][0x60020045] = DataElement(0x60020045, 'LO', 'G')
+        self.assertRaises(ValueError, test_group_mismatch)
+        
+        def test_tag_mismatch_a():
+            overlays[0][0x60000045] = DataElement(0x60020045, 'LO', 'G')
+        self.assertRaises(ValueError, test_group_mismatch)
+        
+        def test_tag_mismatch_b():
+            overlays[0][0x60020045] = DataElement(0x60000045, 'LO', 'G')
+        self.assertRaises(ValueError, test_group_mismatch)
+
+    def test_delattr(self):
         """Test __delattr__"""
         self.assertEqual(self.ds[0x60000010].value, 192)
         overlays = self.ds.OverlaySequence
         del overlays[0].OverlayRows
-        self.assertFalse('0x60000010' in self.ds)
+        self.assertFalse(0x60000010 in self.ds)
         self.assertFalse('OverlayRows' in overlays[0])
         self.assertEqual(self.ds[0x601E0010].value, 192)
         self.assertEqual(overlays[1].OverlayRows, 192)
+
+    def test_delitem(self):
+        """Test __delitem__"""
+        self.assertEqual(self.ds[0x60000010].value, 192)
+        overlays = self.ds.OverlaySequence
+        del overlays[0][0x60000010]
+        self.assertFalse(0x60000010 in self.ds)
+        self.assertFalse('OverlayRows' in overlays[0])
+        self.assertEqual(self.ds[0x601E0010].value, 192)
+        self.assertEqual(overlays[1].OverlayRows, 192)
+
+    def test_del(self):
+        self.assertTrue(0x60003000 in self.ds)
+        del self.ds.OverlaySequence[0]
+        self.assertEqual(self.ds.group_dataset(0x6000), Dataset())
+
+    def test_data_element(self):
+        """Test data_element(keyword)"""
+        overlays = self.ds.OverlaySequence
+        elem = overlays[0].data_element('OverlayRows')
+        self.assertEqual(elem.value, 192)
+        def test():
+            overlays[0].data_element('OverlaySubtype')
+        self.assertRaises(KeyError, test)
 
 
 if __name__ == "__main__":

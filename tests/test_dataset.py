@@ -528,7 +528,7 @@ class TestOverlayDataset(unittest.TestCase):
         test_dir = os.path.dirname(__file__)
         test_file = os.path.join(test_dir, 'test_files', 'MR_overlay.dcm')
         self.ds = read_file(test_file)
-        
+
         overlay_ds = self.ds.group_dataset(0x6000)
         for elem in overlay_ds:
             elem.tag = Tag(0x601E, elem.tag.element)
@@ -658,11 +658,11 @@ class TestOverlayDataset(unittest.TestCase):
         def test_group_mismatch():
             overlays[0][0x60020045] = DataElement(0x60020045, 'LO', 'G')
         self.assertRaises(ValueError, test_group_mismatch)
-        
+
         def test_tag_mismatch_a():
             overlays[0][0x60000045] = DataElement(0x60020045, 'LO', 'G')
         self.assertRaises(ValueError, test_group_mismatch)
-        
+
         def test_tag_mismatch_b():
             overlays[0][0x60020045] = DataElement(0x60000045, 'LO', 'G')
         self.assertRaises(ValueError, test_group_mismatch)
@@ -708,6 +708,91 @@ class TestOverlayDataset(unittest.TestCase):
         self.assertEqual(overlays[0].get('OverlayRows'), 192)
         elem = overlays[0][0x60000010]
         self.assertEqual(overlays[0].get(0x60000010), elem)
+
+
+class TestOverlayArray(unittest.TestCase):
+    """Test OverlayDataset.overlay_array."""
+    def setUp(self):
+        """Import the test dataset."""
+        test_dir = os.path.dirname(__file__)
+        test_file = os.path.join(test_dir, 'test_files',
+                                 'MR_overlay_multiwindow.dcm')
+        self.ds = read_file(test_file)
+
+    @unittest.skipIf(NUMPY_AVAILABLE, 'Skipping as numpy available.')
+    def test_exception_numpy_unavailable(self):
+        """Test ImportError raised if numpy unavailable."""
+        def test():
+            self.ds.overlay_array
+        self.assertRaises(ImportError, test)
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_single_overlay_ob(self):
+        """Test array creation from single frame overlay with VR 'OB'."""
+        arr = self.ds.overlay_array
+        self.assertEqual(arr[0].shape, (192, 192))
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_exception_no_overlay(self):
+        """Test exception raised if trying to get overlay_array with no data."""
+        def test():
+            del self.ds[0x60003000]
+            self.ds.overlay_array
+        self.assertRaises(TypeError, test)
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_multiframe_single_overlay(self):
+        """Test array creation from single multi-frame overlay."""
+        self.ds[0x60003000].value = self.ds[0x60003000].value * 3
+        self.ds[0x60000015] = DataElement(0x60000015, 'IS', 3)
+        arr = self.ds.overlay_array
+        self.assertEqual(arr[0].shape, (3, 192, 192))
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_multi_overlay_seq(self):
+        """Test array creation from sequential Overlay Data works OK."""
+        for ii in range(0x6002, 0x601F, 2):
+            self.ds[(ii, 0x0010)] = DataElement((ii, 0x0010), 'US', 192)
+            self.ds[(ii, 0x0011)] = DataElement((ii, 0x0011), 'US', 192)
+            self.ds[(ii, 0x0050)] = DataElement((ii, 0x0050), 'SS', [1, 1])
+            self.ds[(ii, 0x3000)] = DataElement((ii, 0x3000), 'OB', self.ds[0x60003000].value)
+
+        self.assertTrue(len(self.ds.overlay_array) == 16)
+        for ii in range(16):
+            self.assertEqual(self.ds.overlay_array[ii].shape, (192, 192))
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_multi_overlay_non_seq(self):
+        """Test array creation from non-sequential Overlay Data works OK."""
+        # First and last possible groups, i.e. 0x6000 and 0x601E
+        self.ds[0x601E0010] = DataElement(0x601E0010, 'US', 192)
+        self.ds[0x601E0011] = DataElement(0x601E0011, 'US', 192)
+        self.ds[0x601E0050] = DataElement(0x601E0050, 'SS', [1, 1])
+        self.ds[0x601E3000] = DataElement(0x601E3000, 'OB', self.ds[0x60003000].value)
+
+        self.assertTrue(len(self.ds.overlay_array) == 2)
+        for ii in range(2):
+            self.assertEqual(self.ds.overlay_array[ii].shape, (192, 192))
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_update_overlay(self):
+        """Test overlays are updated if changed."""
+        pass
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_single_overlay_ow(self):
+        """Test array creation from single frame overlay with VR 'OW'."""
+        pass
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_single_overlay_ob(self):
+        """Test array creation from single frame overlay with VR 'OW'."""
+        pass
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_single_overlay_ambiguous_vr(self):
+        """Test array creation from single frame overlay with VR 'OW'."""
+        pass
 
 
 if __name__ == "__main__":

@@ -1507,7 +1507,7 @@ class OverlayDataset(Dataset):
 
         if tag:
             return dict.__contains__(self, tag)
-    
+
         # If `name` isn't a keyword or tag, try the base class
         return super(OverlayDataset, self).__contains__(name)
 
@@ -1607,7 +1607,7 @@ class OverlayDataset(Dataset):
             tag = repeater_tag_for_name(name)
             if tag is None: # `name` isn't a DICOM repeater element keyword
                 raise AttributeError
-            
+
             tag_elem = int(tag[4:], 16)
             tag = Tag(self.group, tag_elem)
             if tag not in self: # DICOM DataElement not in the Dataset
@@ -1699,6 +1699,12 @@ class OverlayDataset(Dataset):
         super(OverlayDataset, self).__setitem__(tag, value)
         self._parent.__setitem__(tag, value)
 
+    def _check_parent(self):
+        """Check if the parent Dataset has changed any of the overlay elements.
+
+        """
+        pass
+
     def data_element(self, keyword):
         """Return the DataElement corresponding to the element `keyword`.
 
@@ -1720,6 +1726,106 @@ class OverlayDataset(Dataset):
             return self[tag]
         return None
 
+    def _overlay_data_numpy(self):
+        """If numpy is available, return a list of ndarray of the Overlay Data.
+
+        Each overlay may be a single plane or multi-framed (if 60xx,0015
+        NumberOfFramesInOverlay > 1). The user is expected to handle any
+        origin offset, i.e. if (60xx,0050) OverlayOrigin is not [1, 1].
+
+        Requires the following elements be present:
+        * (60xx,3000) OverlayData
+        * (60xx,0010) OverlayRows
+        * (60xx,0011) OverlayColumns
+        * (60xx,0015) NumberOfFramesInOverlay (if multi-framed)
+
+        Returns
+        -------
+        arr : numpy.ndarray
+            The Overlay Data element values as a numpy ndarray. Single
+            plane overlays will be a 2D array, multi-frame overlays will be a
+            3D ndarray.
+
+        Raises
+        ------
+        TypeError
+            If there's no Overlay Data.
+        ImportError
+            If numpy isn't available.
+        """
+        if not have_numpy:
+            raise ImportError("Numpy is required to use overlay_data.")
+
+        if 'OverlayData' not in self:
+            # TypeError for consistency with pixel_array
+            raise TypeError("No OverlayData element found in this dataset.")
+
+        # If little endian implicit VR then must be 'OW'
+        # If explicit VR then may be 'OB'
+        # VR of 'OB', no byte ordering correction required
+        elem = self.get('OverlayData')
+        if elem.VR == 'OW':
+            # Correct for byte ordering
+            if not hasattr(self._parent, 'is_little_endian'):
+                raise AttributeError("The parent Dataset object must have a "
+                                     "'is_little_endian' attribute in order to "
+                                     "use overlay_array.")
+            if self._parent.is_little_endian != sys_is_little_endian:
+                numpy_dtype = numpy_dtype.newbyteorder('S')
+            arr = numpy.fromstring(elem.value, dtype='uint16')
+        elif elem.VR == 'OB':
+            # No byte ordering correction required
+            arr = numpy.fromstring(elem.value, dtype='uint8')
+        else:
+            raise ValueError('The VR for {0:s} OverlayData must be '
+                             'non-ambiguous.'.format(elem.tag))
+
+        # OverlayData is encoded in bits
+        arr = numpy.unpackbits(arr)
+        arr = arr.astype('bool')
+
+        # Reshape the array
+        if 'NumberOfFramesInOverlay' in self and \
+                                    self.NumberOfFramesInOverlay > 1:
+            arr = arr.reshape(self.NumberOfFramesInOverlay,
+                              self.OverlayRows, self.OverlayColumns)
+        else:
+            arr = arr.reshape(self.OverlayRows, self.OverlayColumns)
+
+        return arr
+
     @property
     def overlay_array(self):
-        pass
+        """Return the Overlay Data as a numpy ndarray.
+
+        Each overlay may be a single plane or multi-framed (if 60xx,0015
+        NumberOfFramesInOverlay > 1).
+
+        Returns
+        -------
+        numpy ndarray
+            The Overlay Data element values as a boolean numpy ndarray. Single
+            plane overlays will be a 2D array, multi-frame overlays will be a
+            3D array.
+
+        Raises
+        ------
+        TypeError
+            If there's no OverlayData element.
+        """
+        if 'OverlayData' not in self:
+            # TypeError for consistency with pixel_array
+            raise TypeError("No OverlayData element found in this dataset.")
+
+        # If we have _overlay_array and the ID of the OverlayData
+        #   is unchanged, return it
+        if hasattr(self, '_overlay_array') and hasattr(self, '_overlay_id'):
+            if self._overlay_id == id(self.OverlayData.value):
+                return self._overlay_array
+
+        # Either we have no _overlay_array or the ID of the OverlayData has
+        #   changed, so create/update it and the ID
+        self._overlay_array = self._overlay_data_numpy()
+        self._overlay_id = id(self.OverlayData.value)
+
+        return self._overlay_array

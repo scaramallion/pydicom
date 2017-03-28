@@ -542,19 +542,49 @@ class TestOverlayDataset(unittest.TestCase):
         self.assertRaises(ValueError, OverlayDataset, ds, 0x0010)
 
     def test_overlay_seq(self):
-        """Test the Dataset.OverlaySequence returns a list of RepeaterDatasets."""
+        """Test the Dataset.OverlaySequence returns a list of OverlayDatasets."""
         overlays = self.ds.OverlaySequence
         self.assertTrue(isinstance(overlays, list))
         self.assertTrue(isinstance(overlays[0], OverlayDataset))
         self.assertTrue(isinstance(overlays[1], OverlayDataset))
         self.assertEqual(len(overlays), 2)
 
+    def test_overlay_seq_raises_no_elements(self):
+        """Test the Dataset.OverlaySequence raises exception if no elements."""
+        ds = Dataset()
+        def test():
+            ds.OverlaySequence
+        self.assertRaises(AttributeError, test)
+
+    def test_overlay_seq_parent_update(self):
+        """Test the OverlaySequence updates with the parent dataset"""
+        overlays = self.ds.OverlaySequence
+        # Update value
+        self.ds[0x60000010].value = 10
+        self.assertEqual(overlays[0].OverlayRows, 10)
+
+        # Add element
+        self.ds.add(DataElement(0x60000045, 'LO', 'G'))
+        self.assertTrue('OverlaySubtype' in overlays[0])
+
+        # Delete element
+        del self.ds[0x60000010]
+        print(overlays[0])
+        self.assertFalse('OverlayRows' in overlays[0])
+
     def test_contains(self):
         """Test the __contains__ override"""
         overlays = self.ds.OverlaySequence
         self.assertTrue(0x60000010 in self.ds)
+        self.assertFalse(0x60000045 in self.ds)
         self.assertTrue(0x60000010 in overlays[0])
+        self.assertFalse(0x60000045 in overlays[0])
+        self.assertFalse(0x00100010 in overlays[0])
         self.assertTrue('OverlayRows' in overlays[0])
+        self.assertFalse('OverlaySubtype' in overlays[0])
+        self.assertFalse('PixelData' in overlays[0])
+        overlays[0].some_attribute = 'test'
+        self.assertFalse('some_attribute' in overlays[0])
 
     def test_getattr(self):
         """Test the __getattr__ override retrieves data using keywords."""
@@ -658,6 +688,7 @@ class TestOverlayDataset(unittest.TestCase):
         self.assertEqual(overlays[1].OverlayRows, 192)
 
     def test_del(self):
+        """Test deleting the seq item deletes the items from the dataset."""
         self.assertTrue(0x60003000 in self.ds)
         del self.ds.OverlaySequence[0]
         self.assertEqual(self.ds.group_dataset(0x6000), Dataset())
@@ -670,6 +701,13 @@ class TestOverlayDataset(unittest.TestCase):
         def test():
             overlays[0].data_element('OverlaySubtype')
         self.assertRaises(KeyError, test)
+
+    def test_get(self):
+        """Test get"""
+        overlays = self.ds.OverlaySequence
+        self.assertEqual(overlays[0].get('OverlayRows'), 192)
+        elem = overlays[0][0x60000010]
+        self.assertEqual(overlays[0].get(0x60000010), elem)
 
 
 if __name__ == "__main__":

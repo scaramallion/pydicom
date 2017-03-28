@@ -28,7 +28,8 @@ import sys
 from pydicom import compat
 from pydicom.charset import default_encoding, convert_encodings
 from pydicom.datadict import dictionaryVR
-from pydicom.datadict import tag_for_name, all_names_for_tag, repeater_has_keyword
+from pydicom.datadict import (tag_for_name, all_names_for_tag,
+                              repeater_has_keyword, repeater_tag_for_keyword)
 from pydicom.tag import Tag, BaseTag
 from pydicom.dataelem import DataElement, DataElement_from_raw, RawDataElement
 from pydicom.uid import NotCompressedPixelTransferSyntaxes, UncompressedPixelTransferSyntaxes
@@ -1498,11 +1499,8 @@ class OverlayDataset(Dataset):
         """
         # `name` is the DICOM element keyword
         if isinstance(name, (str, compat.text_type)):
-            tag = repeater_tag_for_name(name)
-            if tag:
-                tag = Tag(self.group, int(tag[4:], 16))
-        # `name` is the DICOM element tag
-        else:
+            tag = self._tag_from_keyword(name)
+        else: # `name` is the DICOM element tag
             try:
                 tag = Tag(name)
             except (ValueError, OverflowError):
@@ -1525,6 +1523,7 @@ class OverlayDataset(Dataset):
         True
 
         """
+        print('__del__ called')
         for elem in self:
             self.__delattr__(elem.keyword)
 
@@ -1550,20 +1549,18 @@ class OverlayDataset(Dataset):
         name : str
             The keyword for the DICOM element or the class attribute to delete.
         """
-        # First check if a valid DICOM keyword and if we have that data element
-        tag = repeater_tag_for_name(name)
-        tag_elem = int(tag[4:], 16)
-        tag = Tag(self.group, tag_elem)
-        if tag is not None and tag in self:
-            dict.__delitem__(self, tag)  # direct to dict as we know we have key
-            self._parent.__delitem__(tag)
+        print('__delattr__ called')
+
+        tag = self._tag_from_keyword(name)
+        if tag and tag in self: # `name` is a DICOM keyword
+            self.__delitem__(tag)
         # If not a DICOM name in this dataset, check for regular instance name
         #   can't do delete directly, that will call __delattr__ again
         elif name in self.__dict__:
             del self.__dict__[name]
         # Not found, raise an error in same style as python does
         else:
-            raise AttributeError("'RepeaterDataset' object has no attribute "
+            raise AttributeError("'OverlayDataset' object has no attribute "
                                  "'{0}'".format(name))
 
     def __delitem__(self, tag):
@@ -1579,6 +1576,7 @@ class OverlayDataset(Dataset):
         tag : int or pydicom.tag.Tag
             The tag for the DataElement to be deleted.
         """
+        print('__delitem__ called')
         super(OverlayDataset, self).__delitem__(tag)
         self._parent.__delitem__(tag)
 
@@ -1607,7 +1605,7 @@ class OverlayDataset(Dataset):
               (if present).
         """
         try:
-            tag = repeater_tag_for_name(name)
+            tag = repeater_tag_for_keyword(name)
             if tag is None: # `name` isn't a DICOM repeater element keyword
                 raise AttributeError
 
@@ -1645,7 +1643,7 @@ class OverlayDataset(Dataset):
         value
             The value for the attribute to be added/changed.
         """
-        tag = repeater_tag_for_name(name)
+        tag = repeater_tag_for_keyword(name)
         # If the keyword belongs to a Repeater Group element
         if tag is not None:
             tag = (self.group, int(tag[4:], 16))
@@ -1722,7 +1720,7 @@ class OverlayDataset(Dataset):
             For the given DICOM element `keyword`, return the corresponding
             Dataset DataElement if present, None otherwise.
         """
-        tag = repeater_tag_for_name(keyword)
+        tag = repeater_tag_for_keyword(keyword)
         if tag:
             tag_elem = int(tag[4:], 16)
             tag = Tag(self.group, tag_elem)
@@ -1766,7 +1764,7 @@ class OverlayDataset(Dataset):
         # If little endian implicit VR then must be 'OW'
         # If explicit VR then may be 'OB'
         # VR of 'OB', no byte ordering correction required
-        elem = self.get('OverlayData')
+        elem = self.data_element('OverlayData')
         if elem.VR == 'OW':
             # Correct for byte ordering
             if not hasattr(self._parent, 'is_little_endian'):
@@ -1832,3 +1830,10 @@ class OverlayDataset(Dataset):
         self._overlay_id = id(self.OverlayData.value)
 
         return self._overlay_array
+
+    def _tag_from_keyword(self, keyword):
+        if repeater_has_keyword(keyword):
+            tag = repeater_tag_for_keyword(keyword)
+            return Tag(self.group, int(tag[4:], 16))
+
+        return None

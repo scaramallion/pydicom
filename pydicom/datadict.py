@@ -216,6 +216,7 @@ def tag_for_name(name):
         return NameDict.get(longname, None)
     return None
 
+
 def all_names_for_tag(tag):
     """Return a list of all (long and short) names for the tag"""
     longname = keyword_for_tag(tag)
@@ -233,6 +234,19 @@ def repeater_has_keyword(keyword):
     """Return True if the DICOM repeaters element exists with `keyword`."""
     repeater_keywords = [val[4] for val in RepeatersDictionary.values()]
     return (keyword in repeater_keywords)
+
+def repeater_tag_for_keyword(keyword):
+    """Return the tag mask str for the DICOM repeaters element with `keyword`."""
+    if keyword in repeater_keyword_dict:
+        return repeater_keyword_dict[keyword]
+
+    return None
+
+def repeater_keyword(tag):
+    """Return the corresponding keyword for the repeaters element with mask `tag`."""
+    return RepeatersDictionary[tag][4]
+
+repeater_keyword_dict = dict([(repeater_keyword(tag), tag) for tag in RepeatersDictionary])
 
 # PRIVATE DICTIONARY handling
 # functions in analogy with those of main DICOM dict

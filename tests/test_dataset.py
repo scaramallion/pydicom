@@ -18,7 +18,7 @@ from pydicom.dataset import Dataset, PropertyError, OverlayDataset
 from pydicom.dataelem import DataElement, RawDataElement
 from pydicom.dicomio import read_file
 from pydicom.tag import Tag
-from pydicom.sequence import Sequence
+from pydicom.sequence import Sequence, OverlaySequence
 from pydicom import compat
 
 
@@ -572,17 +572,39 @@ class TestOverlayDataset(unittest.TestCase):
     def test_overlay_seq_parent_update(self):
         """Test the OverlaySequence updates with the parent dataset"""
         overlays = self.ds.OverlaySequence
-        # Update value
+        # Set existing -> getattr and getitem
+        self.assertEqual(overlays[0].OverlayRows, 192)
         self.ds[0x60000010].value = 10
         self.assertEqual(overlays[0].OverlayRows, 10)
+        self.ds[0x60000010].value = 11
+        self.assertEqual(overlays[0][0x60000010].value, 11)
 
-        # Add element
+        # Add -> contains element
+        self.assertFalse(0x60000045 in self.ds)
+        self.assertFalse(0x60000045 in overlays[0])
         self.ds.add(DataElement(0x60000045, 'LO', 'G'))
+        self.assertTrue(0x60000045 in self.ds)
         self.assertTrue('OverlaySubtype' in overlays[0])
 
-        # Delete element
-        del self.ds[0x60000010]
-        self.assertFalse('OverlayRows' in overlays[0])
+        # delitem -> contains element
+        del self.ds[0x60000045]
+        self.assertFalse(0x60000045 in self.ds)
+        self.assertFalse(0x60000045 in overlays[0])
+        self.assertFalse('OverlaySubtype' in overlays[0])
+
+        # delitem -> getattr
+        self.ds.add(DataElement(0x60000045, 'LO', 'G'))
+        del self.ds[0x60000045]
+        def test():
+            overlays[0].OverlaySubtype
+        self.assertRaises(AttributeError, test)
+        
+        # delitem -> getitem
+        self.ds.add(DataElement(0x60000045, 'LO', 'G'))
+        del self.ds[0x60000045]
+        def test():
+            overlays[0][0x60000045]
+        self.assertRaises(KeyError, test)
 
     def test_contains(self):
         """Test the __contains__ override"""
@@ -714,24 +736,31 @@ class TestOverlayDataset(unittest.TestCase):
         self.assertEqual(self.ds[0x601E0010].value, 192)
         self.assertEqual(overlays[1].OverlayRows, 192)
 
-    def test_del(self):
+    def test_overlay_seq_del(self):
         """Test deleting the seq item deletes the items from the dataset."""
-        test_dir = os.path.dirname(__file__)
-        test_file = os.path.join(test_dir, 'test_files', 'MR_overlay.dcm')
-        ds = read_file(test_file)
-        # Check that the element exists in original
-        self.assertTrue(0x60003000 in ds)
-        # When the class dies it will also call __del__
-        print('pre kill')
-        ds.OverlaySequence
-        print('killed first')
-        # This will fail if __del__ not implemented correctly
-        self.assertTrue(0x60003000 in ds)
-        # Check deliberate __del__ call
-        print('pre kill 2')
-        del ds.OverlaySequence[0]
-        print('killed second')
-        self.assertEqual(ds.group_dataset(0x6000), {})
+        self.assertTrue(0x60003000 in self.ds)
+        self.ds.OverlaySequence
+        self.assertTrue(0x60003000 in self.ds)
+        del self.ds.OverlaySequence[0]
+        self.assertEqual(self.ds.group_dataset(0x6000), {})
+
+    def test_overlay_seq_pop(self):
+        """Test popping seq items deletes the items from the dataset."""
+        self.assertTrue(0x60003000 in self.ds)
+        self.ds.OverlaySequence
+        self.assertTrue(0x60003000 in self.ds)
+        overlays = self.ds.OverlaySequence
+        overlays.pop(0)
+        self.assertEqual(self.ds.group_dataset(0x6000), {})
+        
+    def test_overlay_seq_remove(self):
+        """Test removing seq item deletes the items from the dataset."""
+        self.assertTrue(0x60003000 in self.ds)
+        self.ds.OverlaySequence
+        self.assertTrue(0x60003000 in self.ds)
+        overlays = self.ds.OverlaySequence
+        overlays.remove(overlays[1])
+        self.assertEqual(self.ds.group_dataset(0x601E), {})
 
     def test_data_element(self):
         """Test data_element(keyword)"""
@@ -748,6 +777,25 @@ class TestOverlayDataset(unittest.TestCase):
         self.assertEqual(overlays[0].get('OverlayRows'), 192)
         elem = overlays[0][0x60000010]
         self.assertEqual(overlays[0].get(0x60000010), elem)
+
+
+class TestOverlaySequence(unittest.TestCase):
+    def setUp(self):
+        """Import the test dataset."""
+        test_dir = os.path.dirname(__file__)
+        test_file = os.path.join(test_dir, 'test_files', 'MR_overlay.dcm')
+        self.ds = read_file(test_file)
+
+    def test_init(self):
+        seq = OverlaySequence()
+        seq.append(OverlayDataset(self.ds, 0x6000))
+        
+        del seq[0::2]
+        self.assertTrue(len(seq) == 0)
+        seq.append(OverlayDataset(self.ds, 0x6000))
+        del seq[0]
+        self.assertTrue(len(seq) == 0)
+        
 
 
 class TestOverlayArray(unittest.TestCase):

@@ -697,7 +697,9 @@ class Dataset(dict):
         tags = [tag.group for tag in self.keys() if tag.group in all_groups]
         unique_groups = list(set(tags))
         # Create the list of OverlayDatasets
-        overlay_sq = [OverlayDataset(self, group) for group in unique_groups]
+        overlay_sq = OverlaySequence()
+        for group in unique_groups:
+            overlay_sq.append(OverlayDataset(self, group))
 
         if overlay_sq:
             return overlay_sq
@@ -1479,9 +1481,9 @@ class OverlayDataset(Dataset):
         Examples
         --------
         >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
-        >>> 'OverlayData' in overlay_dataset[0]
+        >>> 'OverlayData' in overlay_dataset
         True
-        >>> 0x60003000 in overlay_dataset[0]
+        >>> 0x60003000 in overlay_dataset
         True
 
         Parameters
@@ -1497,35 +1499,21 @@ class OverlayDataset(Dataset):
             True if `name` is a keyword or tag and is in the dataset, True if
             `name` is a class attribute and is present, False otherwise.
         """
-        # `name` is the DICOM element keyword
         if isinstance(name, (str, compat.text_type)):
+            # `name` is a DICOM element keyword
             tag = self._tag_from_keyword(name)
         else: # `name` is the DICOM element tag
             try:
                 tag = Tag(name)
             except (ValueError, OverflowError):
-                return False
+                tag = None
 
         if tag:
+            self._update_from_parent()
             return dict.__contains__(self, tag)
 
         # If `name` isn't a keyword or tag, try the base class
         return super(OverlayDataset, self).__contains__(name)
-
-    def __del__(self):
-        """Delete the elements in self from the parent Dataset.
-
-        Examples
-        --------
-        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
-        >>> del overlay_dataset[0]
-        >>> dataset.group_dataset(0x6000) == {}
-        True
-
-        """
-        print('__del__ called')
-        for elem in self:
-            self.__delattr__(elem.keyword)
 
     def __delattr__(self, name):
         """Intercept requests to delete an attribute by `name`.
@@ -1533,8 +1521,8 @@ class OverlayDataset(Dataset):
         Examples
         --------
         >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
-        >>> del overlay_dataset[0].OverlayRows
-        >>> 'OverlayRows' in overlay_dataset[0]
+        >>> del overlay_dataset.OverlayRows
+        >>> 'OverlayRows' in overlay_dataset
         False
 
         If `name` is a DICOM keyword:
@@ -1549,16 +1537,14 @@ class OverlayDataset(Dataset):
         name : str
             The keyword for the DICOM element or the class attribute to delete.
         """
-        print('__delattr__ called')
-
         tag = self._tag_from_keyword(name)
         if tag and tag in self: # `name` is a DICOM keyword
+            # Delegate DICOM element deletion to __delitem__, which also
+            #   handles deleting the element from the parent Dataset
             self.__delitem__(tag)
-        # If not a DICOM name in this dataset, check for regular instance name
-        #   can't do delete directly, that will call __delattr__ again
-        elif name in self.__dict__:
+        elif name in self.__dict__: # `name` is not a DICOM keyword
+            # Can delete directly as that would call __delattr__ again
             del self.__dict__[name]
-        # Not found, raise an error in same style as python does
         else:
             raise AttributeError("'OverlayDataset' object has no attribute "
                                  "'{0}'".format(name))
@@ -1567,8 +1553,8 @@ class OverlayDataset(Dataset):
         """Delete an item from the dict using the DICOM tag.
 
         >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
-        >>> del overlay_dataset[0][0x60000010]
-        >>> 'OverlayRows' in overlay_dataset[0]
+        >>> del overlay_dataset[0x60000010]
+        >>> 0x60000010 in overlay_dataset
         False
 
         Parameters
@@ -1576,7 +1562,7 @@ class OverlayDataset(Dataset):
         tag : int or pydicom.tag.Tag
             The tag for the DataElement to be deleted.
         """
-        print('__delitem__ called')
+        self._update_from_parent()
         super(OverlayDataset, self).__delitem__(tag)
         self._parent.__delitem__(tag)
 
@@ -1589,7 +1575,7 @@ class OverlayDataset(Dataset):
         Examples
         --------
         >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
-        >>> overlay_dataset[0].OverlayRows
+        >>> overlay_dataset.OverlayRows
         192
 
         Parameters
@@ -1625,11 +1611,7 @@ class OverlayDataset(Dataset):
         Examples
         --------
         >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
-        >>> overlay_dataset[0].OverlayRows
-        192
-        >>> overlay_dataset[0].OverlayRows = 555
-        >>> overlay_dataset[0].OverlayRows
-        555
+        >>> overlay_dataset.OverlaySubtype = 'G'
 
         If `name` is a DICOM keyword then it must be for an element in the same
         Repeaters Group as the other elements in the OverlayDataset.
@@ -1643,24 +1625,25 @@ class OverlayDataset(Dataset):
         value
             The value for the attribute to be added/changed.
         """
-        tag = repeater_tag_for_keyword(name)
-        # If the keyword belongs to a Repeater Group element
-        if tag is not None:
-            tag = (self.group, int(tag[4:], 16))
-            # If the DataElement isn't present in the dataset then add it
-            if tag not in self._parent:
-                VR = dictionaryVR(tag)
-                elem = DataElement(tag, VR, value)
-            else:
+        tag = self._tag_from_keyword(name)
+        if tag: # `name` is an overlay keyword
+            if tag in self._parent:
+                # Update existing element
                 elem = self._parent[tag]
                 elem.value = value
+            else:
+                # Add a new element to the dataset
+                VR = dictionaryVR(tag)
+                elem = DataElement(tag, VR, value)
 
-            self._parent[tag] = elem
-            self[tag] = self._parent[tag]
-        elif tag_for_name(name) is not None:
+            # We delegate the actual addition/update of the DICOM element to
+            #   __setitem__, which also takes care of updating the parent Dataset
+            self.__setitem__(tag, elem)
+        
+        elif tag_for_name(name) is not None: # `name` is a non-overlay keyword
             raise ValueError('Only Repeating Group elements in the '
-                             '({0:04x},eeee) group can be added to the current'
-                             'Overlay Sequence item.'.format(self.group))
+                             '({0:04x},eeee) group can be added to the current '
+                             'OverlayDataset object.'.format(self.group))
         else:
             super(Dataset, self).__setattr__(name, value)
 
@@ -1670,7 +1653,7 @@ class OverlayDataset(Dataset):
         Examples
         --------
         >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
-        >>> overlay_dataset[0][0x60000045] = DataElement(0x60000045, 'LO', 'G')
+        >>> overlay_dataset[0x60000045] = DataElement(0x60000045, 'LO', 'G')
 
         Parameters
         ----------
@@ -1696,15 +1679,16 @@ class OverlayDataset(Dataset):
             raise ValueError("The dictionary key must match the "
                              "DataElement.tag and must be in the 0x{0:04x} "
                              "group".format(self.group))
-
+        
+        self._update_from_parent()
         super(OverlayDataset, self).__setitem__(tag, value)
         self._parent.__setitem__(tag, value)
 
-    def _check_parent(self):
-        """Check if the parent Dataset has changed any of the overlay elements.
-
-        """
-        pass
+    @property
+    def _parent_has_changed(self):
+        """Check if the parent Dataset has changed any of the overlay elements."""
+        parent_overlay = self._parent.group_dataset(self.group)
+        return parent_overlay == self
 
     def data_element(self, keyword):
         """Return the DataElement corresponding to the element `keyword`.
@@ -1726,6 +1710,10 @@ class OverlayDataset(Dataset):
             tag = Tag(self.group, tag_elem)
             return self[tag]
         return None
+
+    def delete_all(self):
+        for elem in self:
+            self.__delitem__(elem.tag)
 
     def _overlay_data_numpy(self):
         """If numpy is available, return a list of ndarray of the Overlay Data.
@@ -1837,3 +1825,7 @@ class OverlayDataset(Dataset):
             return Tag(self.group, int(tag[4:], 16))
 
         return None
+        
+    def _update_from_parent(self):
+        self.clear()
+        dict.__init__(self, self._parent.group_dataset(self.group))

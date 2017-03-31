@@ -8,11 +8,17 @@
 import os
 import unittest
 
-from pydicom.dataset import Dataset, PropertyError
+try:
+    import numpy
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+
+from pydicom.dataset import Dataset, PropertyError, OverlayDataset
 from pydicom.dataelem import DataElement, RawDataElement
 from pydicom.dicomio import read_file
 from pydicom.tag import Tag
-from pydicom.sequence import Sequence
+from pydicom.sequence import Sequence, OverlaySequence
 from pydicom import compat
 
 
@@ -527,6 +533,327 @@ class FileDatasetTests(unittest.TestCase):
         self.assertTrue(d == e)
         e.filename = 'test_filename.dcm'
         self.assertFalse(d == e)
+
+
+class TestOverlayDataset(unittest.TestCase):
+    """Test the OverlayDataset class."""
+    def setUp(self):
+        test_dir = os.path.dirname(__file__)
+        test_file = os.path.join(test_dir, 'test_files', 'MR_overlay.dcm')
+        self.ds = read_file(test_file)
+
+        overlay_ds = self.ds.group_dataset(0x6000)
+        for elem in overlay_ds:
+            elem.tag = Tag(0x601E, elem.tag.element)
+
+        self.ds.update(dict([(elem.tag, elem) for _, elem in overlay_ds.items()]))
+
+    def test_bad_ds(self):
+        """Test RepeaterDataset init raises when ds is bad group."""
+        ds = Dataset()
+        ds.PatientName = 'Test'
+        self.assertRaises(ValueError, OverlayDataset, ds, 0x0010)
+
+    def test_overlay_seq(self):
+        """Test the Dataset.OverlaySequence returns a list of OverlayDatasets."""
+        overlays = self.ds.OverlaySequence
+        self.assertTrue(isinstance(overlays, list))
+        self.assertTrue(isinstance(overlays[0], OverlayDataset))
+        self.assertTrue(isinstance(overlays[1], OverlayDataset))
+        self.assertEqual(len(overlays), 2)
+
+    def test_overlay_seq_raises_no_elements(self):
+        """Test the Dataset.OverlaySequence raises exception if no elements."""
+        ds = Dataset()
+        def test():
+            ds.OverlaySequence
+        self.assertRaises(AttributeError, test)
+
+    def test_overlay_seq_parent_update(self):
+        """Test the OverlaySequence updates with the parent dataset"""
+        overlays = self.ds.OverlaySequence
+        # Set existing -> getattr and getitem
+        self.assertEqual(overlays[0].OverlayRows, 192)
+        self.ds[0x60000010].value = 10
+        self.assertEqual(overlays[0].OverlayRows, 10)
+        self.ds[0x60000010].value = 11
+        self.assertEqual(overlays[0][0x60000010].value, 11)
+
+        # Add -> contains element
+        self.assertFalse(0x60000045 in self.ds)
+        self.assertFalse(0x60000045 in overlays[0])
+        self.ds.add(DataElement(0x60000045, 'LO', 'G'))
+        self.assertTrue(0x60000045 in self.ds)
+        self.assertTrue('OverlaySubtype' in overlays[0])
+
+        # delitem -> contains element
+        del self.ds[0x60000045]
+        self.assertFalse(0x60000045 in self.ds)
+        self.assertFalse(0x60000045 in overlays[0])
+        self.assertFalse('OverlaySubtype' in overlays[0])
+
+        # delitem -> getattr
+        self.ds.add(DataElement(0x60000045, 'LO', 'G'))
+        del self.ds[0x60000045]
+        def test():
+            overlays[0].OverlaySubtype
+        self.assertRaises(AttributeError, test)
+        
+        # delitem -> getitem
+        self.ds.add(DataElement(0x60000045, 'LO', 'G'))
+        del self.ds[0x60000045]
+        def test():
+            overlays[0][0x60000045]
+        self.assertRaises(KeyError, test)
+
+    def test_contains(self):
+        """Test the __contains__ override"""
+        overlays = self.ds.OverlaySequence
+        self.assertTrue(0x60000010 in self.ds)
+        self.assertFalse(0x60000045 in self.ds)
+        self.assertTrue(0x60000010 in overlays[0])
+        self.assertFalse(0x60000045 in overlays[0])
+        self.assertFalse(0x00100010 in overlays[0])
+        self.assertTrue('OverlayRows' in overlays[0])
+        self.assertFalse('OverlaySubtype' in overlays[0])
+        self.assertFalse('PixelData' in overlays[0])
+        overlays[0].some_attribute = 'test'
+        self.assertFalse('some_attribute' in overlays[0])
+
+    def test_getattr(self):
+        """Test the __getattr__ override retrieves data using keywords."""
+        overlays = self.ds.OverlaySequence
+        self.assertEqual(overlays[0].OverlayRows, 192)
+        self.assertEqual(overlays[1].OverlayRows, 192)
+
+    def test_getattr_raises_bad_tag(self):
+        """Test the __getattr__ raises AttributeError if tag not repeater."""
+        overlays = self.ds.OverlaySequence
+        def test():
+            overlays[0].Rows
+        self.assertRaises(AttributeError, test)
+
+    def test_getattr_raises_missing_elem(self):
+        """Test the __getattr__ raises AttributeError if elem not in dataset."""
+        overlays = self.ds.OverlaySequence
+        def test():
+            overlays[0].OverlaySubtype
+        self.assertRaises(AttributeError, test)
+
+    def test_getitem(self):
+        """Test __getitem__ retrieves data using tags."""
+        overlays = self.ds.OverlaySequence
+        self.assertEqual(overlays[0][0x60000010].value, 192)
+        self.assertEqual(overlays[1][0x601E0010].value, 192)
+
+        def test():
+            overlays[0][0x601E0010]
+        self.assertRaises(KeyError, test)
+
+    def test_setattr_update_existing_elem(self):
+        """Test the __setattr__ updates an existing element value."""
+        self.assertEqual(self.ds[0x60000010].value, 192)
+        overlays = self.ds.OverlaySequence
+        overlays[0].OverlayRows = 10
+        self.assertEqual(self.ds[0x60000010].value, 10)
+        self.assertEqual(overlays[0].OverlayRows, 10)
+        self.assertEqual(self.ds[0x601E0010].value, 192)
+        self.assertEqual(overlays[1].OverlayRows, 192)
+
+    def test_setattr_add_new_repeater_elem(self):
+        """Test the __setattr__ adds an new repeater element."""
+        def test():
+            self.ds[0x60000045]
+            self.ds[0x601E0045]
+        self.assertRaises(KeyError, test)
+        overlays = self.ds.OverlaySequence
+        overlays[0].OverlaySubtype = 'G'
+        self.assertEqual(self.ds[0x60000045].value, 'G')
+        self.assertRaises(KeyError, test)
+
+    def test_setattr_add_new_elem(self):
+        """Test the __setattr__ adds an new repeater element."""
+        overlays = self.ds.OverlaySequence
+        def test():
+            overlays[0].ScanType = 'AA'
+        self.assertRaises(ValueError, test)
+        self.assertFalse('ScanType' in self.ds)
+
+    def test_setitem(self):
+        """Test __setitem__ sets data using tags."""
+        overlays = self.ds.OverlaySequence
+        overlays[0][0x60000045] = DataElement(0x60000045, 'LO', 'G')
+        self.assertEqual(overlays[0].OverlaySubtype, 'G')
+        self.assertEqual(self.ds[0x60000045].value, 'G')
+
+    def test_setitem_bad_tag(self):
+        """Test __setitem__ sets data using tags."""
+        overlays = self.ds.OverlaySequence
+        def test_group_mismatch():
+            overlays[0][0x60020045] = DataElement(0x60020045, 'LO', 'G')
+        self.assertRaises(ValueError, test_group_mismatch)
+
+        def test_tag_mismatch_a():
+            overlays[0][0x60000045] = DataElement(0x60020045, 'LO', 'G')
+        self.assertRaises(ValueError, test_group_mismatch)
+
+        def test_tag_mismatch_b():
+            overlays[0][0x60020045] = DataElement(0x60000045, 'LO', 'G')
+        self.assertRaises(ValueError, test_group_mismatch)
+
+    def test_delattr(self):
+        """Test __delattr__"""
+        # Elements
+        self.assertEqual(self.ds[0x60000010].value, 192)
+        overlays = self.ds.OverlaySequence
+        del overlays[0].OverlayRows
+        self.assertFalse(0x60000010 in self.ds)
+        self.assertFalse('OverlayRows' in overlays[0])
+        self.assertEqual(self.ds[0x601E0010].value, 192)
+        self.assertEqual(overlays[1].OverlayRows, 192)
+
+        # Class attribute
+        overlays[0].some_attr = 'test'
+        self.assertEqual(overlays[0].some_attr, 'test')
+        self.assertTrue(hasattr(overlays[0], 'some_attr'))
+        del overlays[0].some_attr
+        self.assertFalse(hasattr(overlays[0], 'some_attr'))
+
+    def test_delattr_raises(self):
+        """Test __delattr__ raises exception if attribute doesn't exists."""
+        def test():
+            overlays = self.ds.OverlaySequence
+            del overlays[0].missing_attribute
+        self.assertRaises(AttributeError, test)
+
+    def test_delitem(self):
+        """Test __delitem__"""
+        self.assertEqual(self.ds[0x60000010].value, 192)
+        overlays = self.ds.OverlaySequence
+        del overlays[0][0x60000010]
+        self.assertFalse(0x60000010 in self.ds)
+        self.assertFalse('OverlayRows' in overlays[0])
+        self.assertEqual(self.ds[0x601E0010].value, 192)
+        self.assertEqual(overlays[1].OverlayRows, 192)
+
+    def test_overlay_seq_del(self):
+        """Test deleting the seq item deletes the items from the dataset."""
+        self.assertTrue(0x60003000 in self.ds)
+        self.ds.OverlaySequence
+        self.assertTrue(0x60003000 in self.ds)
+        del self.ds.OverlaySequence[0]
+        self.assertEqual(self.ds.group_dataset(0x6000), {})
+
+    def test_overlay_seq_pop(self):
+        """Test popping seq items deletes the items from the dataset."""
+        self.assertTrue(0x60003000 in self.ds)
+        self.ds.OverlaySequence
+        self.assertTrue(0x60003000 in self.ds)
+        overlays = self.ds.OverlaySequence
+        overlays.pop(0)
+        self.assertEqual(self.ds.group_dataset(0x6000), {})
+        
+    def test_overlay_seq_remove(self):
+        """Test removing seq item deletes the items from the dataset."""
+        self.assertTrue(0x60003000 in self.ds)
+        self.ds.OverlaySequence
+        self.assertTrue(0x60003000 in self.ds)
+        overlays = self.ds.OverlaySequence
+        overlays.remove(overlays[1])
+        self.assertEqual(self.ds.group_dataset(0x601E), {})
+
+    def test_data_element(self):
+        """Test data_element(keyword)"""
+        overlays = self.ds.OverlaySequence
+        elem = overlays[0].data_element('OverlayRows')
+        self.assertEqual(elem.value, 192)
+        def test():
+            overlays[0].data_element('OverlaySubtype')
+        self.assertRaises(KeyError, test)
+
+    def test_get(self):
+        """Test get"""
+        overlays = self.ds.OverlaySequence
+        self.assertEqual(overlays[0].get('OverlayRows'), 192)
+        elem = overlays[0][0x60000010]
+        self.assertEqual(overlays[0].get(0x60000010), elem)
+
+
+class TestOverlaySequence(unittest.TestCase):
+    def setUp(self):
+        """Import the test dataset."""
+        test_dir = os.path.dirname(__file__)
+        test_file = os.path.join(test_dir, 'test_files', 'MR_overlay.dcm')
+        self.ds = read_file(test_file)
+
+    def test_init(self):
+        seq = OverlaySequence()
+        seq.append(OverlayDataset(self.ds, 0x6000))
+        
+        del seq[0::2]
+        self.assertTrue(len(seq) == 0)
+        seq.append(OverlayDataset(self.ds, 0x6000))
+        del seq[0]
+        self.assertTrue(len(seq) == 0)
+        
+
+
+class TestOverlayArray(unittest.TestCase):
+    """Test OverlayDataset.overlay_array."""
+    def setUp(self):
+        """Import the test dataset."""
+        test_dir = os.path.dirname(__file__)
+        test_file = os.path.join(test_dir, 'test_files', 'MR_overlay.dcm')
+        self.ds = read_file(test_file)
+
+    @unittest.skipIf(NUMPY_AVAILABLE, 'Skipping as numpy available.')
+    def test_exception_numpy_unavailable(self):
+        """Test ImportError raised if numpy unavailable."""
+        def test():
+            self.ds.OverlaySequence[0].overlay_array
+        self.assertRaises(ImportError, test)
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_single_overlay_ob(self):
+        """Test array creation from single frame overlay with VR 'OB'."""
+        arr = self.ds.OverlaySequence[0].overlay_array
+        self.assertEqual(arr[0].shape, (192, 192))
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_exception_no_overlay(self):
+        """Test exception raised if trying to get overlay_array with no data."""
+        def test():
+            del self.ds[0x60003000]
+            self.ds.OverlaySequence[0].overlay_array
+        self.assertRaises(TypeError, test)
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_multiframe_single_overlay(self):
+        """Test array creation from single multi-frame overlay."""
+        self.ds[0x60003000].value = self.ds[0x60003000].value * 3
+        self.ds[0x60000015] = DataElement(0x60000015, 'IS', 3)
+        arr = self.ds.OverlaySequence[0].overlay_array
+        self.assertEqual(arr[0].shape, (3, 192, 192))
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_update_overlay(self):
+        """Test overlays are updated if changed."""
+        pass
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_single_overlay_ow(self):
+        """Test array creation from single frame overlay with VR 'OW'."""
+        pass
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_single_overlay_ob(self):
+        """Test array creation from single frame overlay with VR 'OW'."""
+        pass
+
+    @unittest.skipIf(not NUMPY_AVAILABLE, 'Skipping as numpy unavailable.')
+    def test_single_overlay_ambiguous_vr(self):
+        """Test array creation from single frame overlay with VR 'OW'."""
+        pass
 
 
 if __name__ == "__main__":

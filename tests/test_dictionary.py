@@ -36,6 +36,23 @@ class DictTests(unittest.TestCase):
         self.assertEqual(dictionary_description(0x280400), 'Transform Label')
         self.assertEqual(dictionary_description(0x280410), 'Rows For Nth Order Coefficients')
 
+    def test_get_entry_main(self):
+        """Test get_entry returns the correct tuple for normal tags."""
+        tag = 0x00100010 # PatientName
+        entry = get_entry(tag)
+        self.assertEqual(entry[4], 'PatientName')
+    
+    def test_get_entry_raises(self):
+        """Test get_entry raises KeyError if tag not found."""
+        tag = 0x00110010
+        self.assertRaises(KeyError, get_entry, tag)
+
+    def test_get_entry_repeaters(self):
+        """Test get_entry returns the correct tuple for repeater tags."""
+        tag = 0x60000010 # OverlayRows
+        entry = get_entry(tag)
+        self.assertEqual(entry[4], 'OverlayRows')
+
     def test_dict_has_tag(self):
         """Test dictionary_has_tag"""
         self.assertTrue(dictionary_has_tag(0x00100010))

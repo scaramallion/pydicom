@@ -28,7 +28,8 @@ import sys
 from pydicom import compat
 from pydicom.charset import default_encoding, convert_encodings
 from pydicom.datadict import dictionaryVR
-from pydicom.datadict import tag_for_name, all_names_for_tag, repeater_has_keyword
+from pydicom.datadict import (tag_for_name, all_names_for_tag,
+                              repeater_has_keyword, repeater_tag_for_keyword)
 from pydicom.tag import Tag, BaseTag
 from pydicom.dataelem import DataElement, DataElement_from_raw, RawDataElement
 from pydicom.uid import NotCompressedPixelTransferSyntaxes, UncompressedPixelTransferSyntaxes
@@ -618,6 +619,93 @@ class Dataset(dict):
     def __ne__(self, other):
         """Compare `self` and `other` for inequality."""
         return not (self == other)
+
+    @property
+    def OverlaySequence(self):
+        """A dummy element to make manipulating overlay data (60xx,eeee) easier.
+
+        Repeating Group elements such as (60xx,eeee) can be thought of as an
+        early analogy to Sequences. Overlay repeating groups are even integers
+        in the range 0x6000 to 0x601F.
+
+        Any changes made to the OverlayDatasets in the OverlaySequence will be
+        reflected in the current Dataset.
+
+        Although this property uses the same name convention as a DICOM
+        Data Element keyword, it is a convenience only and is not an element,
+        nor is it in the Dataset dict.
+
+        Examples
+        --------
+        Get the repeating group of the overlay elements
+        >>> print('{0:04x}'.format(ds.OverlaySequence[0].group))
+        6000
+
+        Get and update an overlay element value
+        >>> ds[0x60000010].value
+        192
+        >>> ds.OverlaySequence[0].OverlayRows
+        192
+        >>> ds.OverlaySequence[0].OverlayRows = 50
+        >>> ds.OverlaySequence[0].OverlayRows
+        50
+        >>> ds[0x60000010].value
+        50
+
+        Add a new overlay element
+        >>> 0x60000045 in ds
+        False
+        >>> ds.OverlaySequence[0].OverlaySubtype = 'G'
+        >>> 0x60000045 in ds
+        True
+        >>> ds[0x60000045].value
+        'G'
+
+        Delete an overlay element
+        >>> 0x60000010 in ds
+        True
+        >>> del ds.OverlaySequence[0].OverlayRows
+        >>> 0x60000010 in ds
+        False
+
+        Delete all the overlay elements in a group
+        >>> len(ds.group_dataset(0x6000))
+        10
+        >>> del ds.OverlaySequence[0]
+        >>> ds.group_dataset(0x6000) == {}
+        True
+
+        Get a numpy ndarray containing the OverlayData (if present)
+        >>> arr = ds.OverlaySequence[0].overlay_array
+        >>> arr.shape
+        (192, 192)
+
+        Returns
+        -------
+        list of pydicom.dataset.OverlayDataset
+            Each item in the list will be an OverlayDataset object containing
+            the elements from each of the 60xx groups present in the Dataset.
+
+        Raises
+        ------
+        AttributeError
+            If no overlay elements are present in the Dataset.
+        """
+        # All possible overlay element tag group numbers
+        all_groups = range(0x6000, 0x601F, 2)
+        # Unique overlay element tag group numbers
+        tags = [tag.group for tag in self.keys() if tag.group in all_groups]
+        unique_groups = list(set(tags))
+        # Create the list of OverlayDatasets
+        overlay_sq = OverlaySequence()
+        for group in unique_groups:
+            overlay_sq.append(OverlayDataset(self, group))
+
+        if overlay_sq:
+            return overlay_sq
+
+        # Use AttributeError to be consistent with a missing Element
+        raise AttributeError('Dataset has no (60xx,eeee) overlay elements.')
 
     def _pixel_data_numpy(self):
         """If NumPy is available, return an ndarray of the Pixel Data.
@@ -1353,3 +1441,391 @@ class FileDataset(Dataset):
         if stat_available and self.filename and os.path.exists(self.filename):
             statinfo = os.stat(self.filename)
             self.timestamp = statinfo.st_mtime
+
+
+class OverlayDataset(Dataset):
+    """A dummy Dataset used for easier access to 60xx repeating group elements.
+
+    Any changes to the Overlay dataset will be applied to the original dataset.
+    For example, if you update or delete or add an element in the OverlayDataset
+    the same change will be applied to the original Dataset.
+
+    Only overlay elements of the same group as those already in the
+    OverlayDataset can be added.
+
+    Attributes
+    ----------
+    group : int
+        The repeating group number of the elements in the dataset.
+    """
+    def __init__(self, ds, group):
+        """Create a new OverlayDataset.
+
+        Parameters
+        ----------
+        ds : pydicom.dataset.Dataset
+            The original dataset containing the overlay elements.
+        group : int
+            The overlay tag group to use, e.g. 0x601A. Must be an even number in
+            the range 0x6000 to 0x601F.
+        """
+        if group not in range(0x6000, 0x601F, 2):
+            raise ValueError('Invalid group for overlay elements')
+        self.group = group
+        self._parent = ds
+        Dataset.__init__(self, ds.group_dataset(group))
+
+    def __contains__(self, name):
+        """Return True if `name` is in the class dict, False otherwise
+
+        Examples
+        --------
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> 'OverlayData' in overlay_dataset
+        True
+        >>> 0x60003000 in overlay_dataset
+        True
+
+        Parameters
+        ----------
+        name : str or int or 2-tuple
+            The Element keyword or tag, or the class attribute name to check
+            for. If `name` is a DICOM element tag then it can be in any of the
+            forms accepted by the pydicom.tag.Tag function.
+
+        Returns
+        -------
+        bool
+            True if `name` is a keyword or tag and is in the dataset, True if
+            `name` is a class attribute and is present, False otherwise.
+        """
+        if isinstance(name, (str, compat.text_type)):
+            # `name` is a DICOM element keyword
+            tag = self._tag_from_keyword(name)
+        else: # `name` is the DICOM element tag
+            try:
+                tag = Tag(name)
+            except (ValueError, OverflowError):
+                tag = None
+
+        if tag:
+            self._update_from_parent()
+            return dict.__contains__(self, tag)
+
+        # If `name` isn't a keyword or tag, try the base class
+        return super(OverlayDataset, self).__contains__(name)
+
+    def __delattr__(self, name):
+        """Intercept requests to delete an attribute by `name`.
+
+        Examples
+        --------
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> del overlay_dataset.OverlayRows
+        >>> 'OverlayRows' in overlay_dataset
+        False
+
+        If `name` is a DICOM keyword:
+            Delete the corresponding DataElement from the Dataset.
+            >>> del ds.PatientName
+        Else:
+            Delete the class attribute as any other class would do.
+            >>> del ds._is_some_attribute
+
+        Parameters
+        ----------
+        name : str
+            The keyword for the DICOM element or the class attribute to delete.
+        """
+        tag = self._tag_from_keyword(name)
+        if tag and tag in self: # `name` is a DICOM keyword
+            # Delegate DICOM element deletion to __delitem__, which also
+            #   handles deleting the element from the parent Dataset
+            self.__delitem__(tag)
+        elif name in self.__dict__: # `name` is not a DICOM keyword
+            # Can delete directly as that would call __delattr__ again
+            del self.__dict__[name]
+        else:
+            raise AttributeError("'OverlayDataset' object has no attribute "
+                                 "'{0}'".format(name))
+
+    def __delitem__(self, tag):
+        """Delete an item from the dict using the DICOM tag.
+
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> del overlay_dataset[0x60000010]
+        >>> 0x60000010 in overlay_dataset
+        False
+
+        Parameters
+        ----------
+        tag : int or pydicom.tag.Tag
+            The tag for the DataElement to be deleted.
+        """
+        self._update_from_parent()
+        super(OverlayDataset, self).__delitem__(tag)
+        self._parent.__delitem__(tag)
+
+    def __getattr__(self, name):
+        """Intercept requests for Dataset attribute names.
+
+        If `name` matches a DICOM keyword, return the value for the
+        DataElement with the corresponding tag.
+
+        Examples
+        --------
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> overlay_dataset.OverlayRows
+        192
+
+        Parameters
+        ----------
+        name
+            A DataElement keyword or tag or a class attribute name.
+
+        Returns
+        -------
+        value
+              If `name` matches a DICOM keyword, returns the corresponding
+              DataElement's value. Otherwise returns the class attribute's value
+              (if present).
+        """
+        try:
+            tag = repeater_tag_for_keyword(name)
+            if tag is None: # `name` isn't a DICOM repeater element keyword
+                raise AttributeError
+
+            tag_elem = int(tag[4:], 16)
+            tag = Tag(self.group, tag_elem)
+            if tag not in self: # DICOM DataElement not in the Dataset
+                raise AttributeError
+            else:
+                return self._parent[tag].value
+        except AttributeError:
+            # Try the base class attribute getter
+            return super(OverlayDataset, self).__getattribute__(name)
+
+    def __setattr__(self, name, value):
+        """Intercept any attempts to set a value for an instance attribute.
+
+        Examples
+        --------
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> overlay_dataset.OverlaySubtype = 'G'
+
+        If `name` is a DICOM keyword then it must be for an element in the same
+        Repeaters Group as the other elements in the OverlayDataset.
+
+        Parameters
+        ----------
+        name : str
+            The element keyword for the DataElement you wish to add/change. If
+            `name` is not a DICOM element keyword then this will be the
+            name of the attribute to be added/changed.
+        value
+            The value for the attribute to be added/changed.
+        """
+        tag = self._tag_from_keyword(name)
+        if tag: # `name` is an overlay keyword
+            if tag in self._parent:
+                # Update existing element
+                elem = self._parent[tag]
+                elem.value = value
+            else:
+                # Add a new element to the dataset
+                VR = dictionaryVR(tag)
+                elem = DataElement(tag, VR, value)
+
+            # We delegate the actual addition/update of the DICOM element to
+            #   __setitem__, which also takes care of updating the parent Dataset
+            self.__setitem__(tag, elem)
+        
+        elif tag_for_name(name) is not None: # `name` is a non-overlay keyword
+            raise ValueError('Only Repeating Group elements in the '
+                             '({0:04x},eeee) group can be added to the current '
+                             'OverlayDataset object.'.format(self.group))
+        else:
+            super(Dataset, self).__setattr__(name, value)
+
+    def __setitem__(self, key, value):
+        """Operator for Dataset[key] = value.
+
+        Examples
+        --------
+        >>> overlay_dataset = OverlayDataset(dataset, 0x6000)
+        >>> overlay_dataset[0x60000045] = DataElement(0x60000045, 'LO', 'G')
+
+        Parameters
+        ----------
+        key : int
+            The tag for the element to be added to the Dataset.
+        value : pydicom.dataelem.DataElement
+            The element to add to the Dataset.
+
+        Raises
+        ------
+        TypeError
+            If value is not a pydicom.dataelem.DataElement
+        ValueError
+            If the `key` value doesn't match DataElement.tag or the tag group
+            doesn't match OverlayDataset.group.
+        """
+        if not isinstance(value, DataElement):
+            raise TypeError("Dataset contents must be DataElement instances.")
+
+        tag = Tag(value.tag)
+        key_tag = Tag(key)
+        if key_tag != tag or key_tag.group != self.group:
+            raise ValueError("The dictionary key must match the "
+                             "DataElement.tag and must be in the 0x{0:04x} "
+                             "group".format(self.group))
+        
+        self._update_from_parent()
+        super(OverlayDataset, self).__setitem__(tag, value)
+        self._parent.__setitem__(tag, value)
+
+    @property
+    def _parent_has_changed(self):
+        """Check if the parent Dataset has changed any of the overlay elements."""
+        parent_overlay = self._parent.group_dataset(self.group)
+        return parent_overlay == self
+
+    def data_element(self, keyword):
+        """Return the DataElement corresponding to the element `keyword`.
+
+        Parameters
+        ----------
+        name : str
+            A DICOM element keyword.
+
+        Returns
+        -------
+        pydicom.dataelem.DataElement or None
+            For the given DICOM element `keyword`, return the corresponding
+            Dataset DataElement if present, None otherwise.
+        """
+        tag = repeater_tag_for_keyword(keyword)
+        if tag:
+            tag_elem = int(tag[4:], 16)
+            tag = Tag(self.group, tag_elem)
+            return self[tag]
+        return None
+
+    def delete_all(self):
+        for elem in self:
+            self.__delitem__(elem.tag)
+
+    def _overlay_data_numpy(self):
+        """If numpy is available, return a list of ndarray of the Overlay Data.
+
+        Each overlay may be a single plane or multi-framed (if 60xx,0015
+        NumberOfFramesInOverlay > 1). The user is expected to handle any
+        origin offset, i.e. if (60xx,0050) OverlayOrigin is not [1, 1].
+
+        Requires the following elements be present:
+        * (60xx,3000) OverlayData
+        * (60xx,0010) OverlayRows
+        * (60xx,0011) OverlayColumns
+        * (60xx,0015) NumberOfFramesInOverlay (if multi-framed)
+
+        Returns
+        -------
+        arr : numpy.ndarray
+            The Overlay Data element values as a numpy ndarray. Single
+            plane overlays will be a 2D array, multi-frame overlays will be a
+            3D ndarray.
+
+        Raises
+        ------
+        TypeError
+            If there's no Overlay Data.
+        ImportError
+            If numpy isn't available.
+        """
+        if not have_numpy:
+            raise ImportError("Numpy is required to use overlay_data.")
+
+        if 'OverlayData' not in self:
+            # TypeError for consistency with pixel_array
+            raise TypeError("No OverlayData element found in this dataset.")
+
+        # If little endian implicit VR then must be 'OW'
+        # If explicit VR then may be 'OB'
+        # VR of 'OB', no byte ordering correction required
+        elem = self.data_element('OverlayData')
+        if elem.VR == 'OW':
+            # Correct for byte ordering
+            if not hasattr(self._parent, 'is_little_endian'):
+                raise AttributeError("The parent Dataset object must have a "
+                                     "'is_little_endian' attribute in order to "
+                                     "use overlay_array.")
+            if self._parent.is_little_endian != sys_is_little_endian:
+                numpy_dtype = numpy_dtype.newbyteorder('S')
+            arr = numpy.fromstring(elem.value, dtype='uint16')
+        elif elem.VR == 'OB':
+            # No byte ordering correction required
+            arr = numpy.fromstring(elem.value, dtype='uint8')
+        else:
+            raise ValueError('The VR for {0:s} OverlayData must be '
+                             'non-ambiguous.'.format(elem.tag))
+
+        # OverlayData is encoded in bits
+        arr = numpy.unpackbits(arr)
+        arr = arr.astype('bool')
+
+        # Reshape the array
+        if 'NumberOfFramesInOverlay' in self and \
+                                    self.NumberOfFramesInOverlay > 1:
+            arr = arr.reshape(self.NumberOfFramesInOverlay,
+                              self.OverlayRows, self.OverlayColumns)
+        else:
+            arr = arr.reshape(self.OverlayRows, self.OverlayColumns)
+
+        return arr
+
+    @property
+    def overlay_array(self):
+        """Return the Overlay Data as a numpy ndarray.
+
+        Each overlay may be a single plane or multi-framed (if 60xx,0015
+        NumberOfFramesInOverlay > 1).
+
+        Returns
+        -------
+        numpy ndarray
+            The Overlay Data element values as a boolean numpy ndarray. Single
+            plane overlays will be a 2D array, multi-frame overlays will be a
+            3D array.
+
+        Raises
+        ------
+        TypeError
+            If there's no OverlayData element.
+        """
+        if 'OverlayData' not in self:
+            # TypeError for consistency with pixel_array
+            raise TypeError("No OverlayData element found in this dataset.")
+
+        # If we have _overlay_array and the ID of the OverlayData
+        #   is unchanged, return it
+        if hasattr(self, '_overlay_array') and hasattr(self, '_overlay_id'):
+            if self._overlay_id == id(self.OverlayData.value):
+                return self._overlay_array
+
+        # Either we have no _overlay_array or the ID of the OverlayData has
+        #   changed, so create/update it and the ID
+        self._overlay_array = self._overlay_data_numpy()
+        self._overlay_id = id(self.OverlayData.value)
+
+        return self._overlay_array
+
+    def _tag_from_keyword(self, keyword):
+        if repeater_has_keyword(keyword):
+            tag = repeater_tag_for_keyword(keyword)
+            return Tag(self.group, int(tag[4:], 16))
+
+        return None
+        
+    def _update_from_parent(self):
+        self.clear()
+        dict.__init__(self, self._parent.group_dataset(self.group))

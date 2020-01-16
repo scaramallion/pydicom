@@ -11,4 +11,5 @@ pydicom:
    :maxdepth: 1
 
    element_value_types
+   glossary
    writing_documentation

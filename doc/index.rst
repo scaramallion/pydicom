@@ -45,7 +45,8 @@ If you're new to *pydicom* then start here:
 
 * :doc:`Installation<tutorials/installation>` |
   :doc:`Introduction to pydicom<old/getting_started>`
-* **Basics**: :doc:`Read, access, modify, write</tutorials/dataset_basics>`
+* **Basics**: :doc:`Read, access, modify, write</tutorials/dataset_basics>` |
+  :doc:`Create a dataset from scratch</tutorials/dataset_from_scratch>`
 
 
 :doc:`User Guide <old/pydicom_user_guide>`

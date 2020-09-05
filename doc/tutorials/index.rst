@@ -6,6 +6,9 @@ Tutorials
 
 New to *pydicom*? Then these tutorials should get you up and running.
 
+Basic
+=====
+
 .. toctree::
    :maxdepth: 1
 
@@ -14,6 +17,14 @@ New to *pydicom*? Then these tutorials should get you up and running.
    dataset_basics
    sr_basics
    dicom_json
-   waveforms
    contributing_code
    contributing_docs
+
+Intermediate
+============
+
+.. toctree::
+   :maxdepth: 1
+
+   pixels_decoding
+   waveforms

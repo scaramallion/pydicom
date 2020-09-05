@@ -112,6 +112,7 @@ SUPPORTED_TRANSFER_SYNTAXES = _LIBJPEG_SYNTAXES + _OPENJPEG_SYNTAXES
 
 DEPENDENCIES = {
     "numpy": ("http://www.numpy.org/", "NumPy"),
+    'pylibjpeg': ('https://github.com/pydicom/pylibjpeg', 'pylibjpeg'),
 }
 
 

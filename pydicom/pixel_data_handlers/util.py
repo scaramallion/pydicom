@@ -1,6 +1,5 @@
 # Copyright 2008-2018 pydicom authors. See LICENSE file for details.
 """Utility functions used in the pixel data handlers."""
-from __future__ import division
 
 from struct import unpack
 from sys import byteorder
@@ -112,6 +111,9 @@ def apply_color_lut(arr, ds=None, palette=None):
             "Use of this function with the Supplemental Palette Color Lookup "
             "Table Module is not currently supported"
         )
+
+    if 'RedPaletteColorLookupTableDescriptor' not in ds:
+        raise ValueError("No suitable Palette Color Lookup Table Module found")
 
     # All channels are supposed to be identical
     lut_desc = ds.RedPaletteColorLookupTableDescriptor
@@ -231,7 +233,15 @@ def apply_modality_lut(arr, ds):
         nominal_depth = item.LUTDescriptor[2]
 
         dtype = 'uint{}'.format(nominal_depth)
-        lut_data = np.asarray(item.LUTData, dtype=dtype)
+
+        # Ambiguous VR, US or OW
+        if item['LUTData'].VR == 'OW':
+            endianness = '<' if ds.is_little_endian else '>'
+            unpack_fmt = '{}{}H'.format(endianness, nr_entries)
+            lut_data = unpack(unpack_fmt, item.LUTData)
+        else:
+            lut_data = item.LUTData
+        lut_data = np.asarray(lut_data, dtype=dtype)
 
         # IVs < `first_map` get set to first LUT entry (i.e. index 0)
         clipped_iv = np.zeros(arr.shape, dtype=arr.dtype)
@@ -297,6 +307,12 @@ def apply_voi_lut(arr, ds, index=0):
       <part04/sect_N.2.html#sect_N.2.1.1>`
     """
     if 'VOILUTSequence' in ds:
+        if not np.issubdtype(arr.dtype, np.integer):
+            warnings.warn(
+                "Applying a VOI LUT on a float input array may give "
+                "incorrect results"
+            )
+
         # VOI LUT Sequence contains one or more items
         item = ds.VOILUTSequence[index]
         nr_entries = item.LUTDescriptor[0] or 2**16
@@ -314,10 +330,17 @@ def apply_voi_lut(arr, ds, index=0):
                 .format(nominal_depth)
             )
 
-        lut_data = np.asarray(item.LUTData, dtype=dtype)
+        # Ambiguous VR, US or OW
+        if item['LUTData'].VR == 'OW':
+            endianness = '<' if ds.is_little_endian else '>'
+            unpack_fmt = '{}{}H'.format(endianness, nr_entries)
+            lut_data = unpack(unpack_fmt, item.LUTData)
+        else:
+            lut_data = item.LUTData
+        lut_data = np.asarray(lut_data, dtype=dtype)
 
         # IVs < `first_map` get set to first LUT entry (i.e. index 0)
-        clipped_iv = np.zeros(arr.shape, dtype=arr.dtype)
+        clipped_iv = np.zeros(arr.shape, dtype=dtype)
         # IVs >= `first_map` are mapped by the VOI LUT
         # `first_map` may be negative, positive or 0
         mapped_pixels = arr >= first_map
@@ -742,7 +765,7 @@ def get_expected_length(ds, unit='bytes'):
         pixels, excluding the NULL trailing padding byte for odd length data.
     """
     length = ds.Rows * ds.Columns * ds.SamplesPerPixel
-    length *= getattr(ds, 'NumberOfFrames', 1)
+    length *= get_nr_frames(ds)
 
     if unit == 'pixels':
         return length
@@ -819,6 +842,69 @@ def get_image_pixel_ids(ds):
     ]
 
     return {kw: id(getattr(ds, kw, None)) for kw in keywords}
+
+
+def get_j2k_parameters(codestream):
+    """Return a dict containing JPEG 2000 component parameters.
+
+    .. versionadded:: 2.1
+
+    Parameters
+    ----------
+    codestream : bytes
+        The JPEG 2000 (ISO/IEC 15444-1) codestream to be parsed.
+
+    Returns
+    -------
+    dict
+        A dict containing parameters for the first component sample in the
+        JPEG 2000 `codestream`, or an empty dict if unable to parse the data.
+        Available parameters are ``{"precision": int, "is_signed": bool}``.
+    """
+    try:
+        # First 2 bytes must be the SOC marker - if not then wrong format
+        if codestream[0:2] != b'\xff\x4f':
+            return {}
+
+        # SIZ is required to be the second marker - Figure A-3 in 15444-1
+        if codestream[2:4] != b'\xff\x51':
+            return {}
+
+        # See 15444-1 A.5.1 for format of the SIZ box and contents
+        ssiz = codestream[42]
+        if ssiz & 0x80:
+            return {"precision": (ssiz & 0x7F) + 1, "is_signed": True}
+
+        return {"precision": ssiz + 1, "is_signed": False}
+    except (IndexError, TypeError):
+        pass
+
+    return {}
+
+
+def get_nr_frames(ds):
+    """Return NumberOfFrames or 1 if NumberOfFrames is None.
+
+    Parameters
+    ----------
+    ds : dataset.Dataset
+        The :class:`~pydicom.dataset.Dataset` containing the Image Pixel module
+        corresponding to the data in `arr`.
+
+    Returns
+    -------
+    int
+        An integer for the NumberOfFrames or 1 if NumberOfFrames is None
+    """
+    nr_frames = getattr(ds, 'NumberOfFrames', 1)
+    # 'NumberOfFrames' may exist in the DICOM file but have value equal to None
+    if nr_frames is None:
+        warnings.warn("A value of None for (0028,0008) 'Number of Frames' is "
+                      "non-conformant. It's recommended that this value be "
+                      "changed to 1")
+        nr_frames = 1
+
+    return nr_frames
 
 
 def pixel_dtype(ds, as_float=False):
@@ -961,9 +1047,9 @@ def reshape_pixel_array(ds, arr):
     |                        | Non-hierarchical,  |                       |
     |                        | SV1                |                       |
     +------------------------+--------------------+-----------------------+
-    | 1.2.840.10008.1.2.4.80 | JPEG-LS Lossless   | 1                     |
+    | 1.2.840.10008.1.2.4.80 | JPEG-LS Lossless   | 0                     |
     +------------------------+--------------------+-----------------------+
-    | 1.2.840.10008.1.2.4.81 | JPEG-LS Lossy      | 1                     |
+    | 1.2.840.10008.1.2.4.81 | JPEG-LS Lossy      | 0                     |
     +------------------------+--------------------+-----------------------+
     | 1.2.840.10008.1.2.4.90 | JPEG 2000 Lossless | 0                     |
     +------------------------+--------------------+-----------------------+
@@ -971,6 +1057,10 @@ def reshape_pixel_array(ds, arr):
     +------------------------+--------------------+-----------------------+
     | 1.2.840.10008.1.2.5    | RLE Lossless       | 1                     |
     +------------------------+--------------------+-----------------------+
+
+    .. versionchanged:: 2.1
+
+        JPEG-LS transfer syntaxes changed to *Planar Configuration* of 0
 
     Parameters
     ----------
@@ -1001,7 +1091,7 @@ def reshape_pixel_array(ds, arr):
     if not HAVE_NP:
         raise ImportError("Numpy is required to reshape the pixel array.")
 
-    nr_frames = getattr(ds, 'NumberOfFrames', 1)
+    nr_frames = get_nr_frames(ds)
     nr_samples = ds.SamplesPerPixel
 
     if nr_frames < 1:
@@ -1024,12 +1114,12 @@ def reshape_pixel_array(ds, arr):
         if transfer_syntax in ['1.2.840.10008.1.2.4.50',
                                '1.2.840.10008.1.2.4.57',
                                '1.2.840.10008.1.2.4.70',
+                               '1.2.840.10008.1.2.4.80',
+                               '1.2.840.10008.1.2.4.81',
                                '1.2.840.10008.1.2.4.90',
                                '1.2.840.10008.1.2.4.91']:
             planar_configuration = 0
-        elif transfer_syntax in ['1.2.840.10008.1.2.4.80',
-                                 '1.2.840.10008.1.2.4.81',
-                                 '1.2.840.10008.1.2.5']:
+        elif transfer_syntax in ['1.2.840.10008.1.2.5']:
             planar_configuration = 1
         else:
             planar_configuration = ds.PlanarConfiguration

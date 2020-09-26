@@ -1,0 +1,67 @@
+Version 2.1.0
+=================================
+
+Changelog
+---------
+* Dropped support for Python 3.5 (only Python 3.6+ supported)
+
+Enhancements
+............
+* Large testing data is no longer distributed within the pydicom package
+  with the aim to reduce the package download size. These test files
+  will download on-the-fly whenever either the tests are run, or should
+  the file(s) be requested via the data manager functions.
+  For example:
+
+  * To download all files and get their paths on disk you can run
+    :func:`pydicom.data.get_testdata_files`.
+  * To download an individual file and get its path on disk you can use
+    :func:`pydicom.data.get_testdata_file`, e.g. for ``RG1_UNCI.dcm`` use
+    ``pydicom.data.get_testdata_file("RG1_UNCI.dcm")``
+* Added a new pixel data handler based on pylibjpeg which supports all
+  (non-retired) JPEG transfer syntaxes (:issue:`1127`)
+* Added :func:`~pydicom.pixel_data_handlers.apply_rescale`,
+  :func:`~pydicom.pixel_data_handlers.apply_windowing`  aliases
+* Added ability to register external data sources for use with the functions
+  in :mod:`pydicom.data` (:pr:`1156`)
+* ``__contains__``, ``__next__`` and ``__iter__`` implementations added to
+  :class:`~pydicom.valuerep.PersonName` (:issue:`1103`)
+* Added convenience constants for the MPEG transfer syntaxes to
+  :mod:`pydicom.uid` (:pr:`1155`)
+* Added support for decoding *Waveform Data*:
+
+  * Added :mod:`pydicom.waveforms` module and
+    :func:`~pydicom.waveforms.numpy_handler.generate_multiplex` and
+    :func:`~pydicom.waveforms.numpy_handler.multiplex_array` functions.
+  * Added :meth:`Dataset.waveform_array()
+    <pydicom.dataset.Dataset.waveform_array>` which returns an
+    :class:`~numpy.ndarray` for the multiplex group at `index` within a
+    *Waveform Sequence* element.
+* When JPEG 2000 image data is unsigned and the *Pixel Representation* is 1
+  the image data is converted to signed (:issue:`1149`)
+
+Changes
+.......
+* Reading and adding unknown non-private tags now does not raise an exception
+  per default, only when :attr:`~pydicom.config.enforce_valid_values` is set
+  (:issue:`1161`)
+* Data dictionaries updated to version 2020c of the DICOM Standard
+
+Fixes
+.....
+* :meth:`Dataset.copy()<pydicom.dataset.Dataset.copy>` now works as expected
+  (:issue:`1146`)
+* Optimistically parse undefined length non-SQ data as if it's encapsulated
+  pixel data to avoid erroring out on embedded sequence delimiter
+  (:issue:`1140`)
+* Fixed :func:`~pydicom.data.get_testdata_file` and
+  :func:`~pydicom.data.get_testdata_files` raising an exception if no network
+  connection is available (:pr:`1156`)
+* Fixed GDCM < v2.8.8 not returning the pixel array for datasets not read from
+  a file-like (:issue:`1153`)
+* Raise ``TypeError`` if :func:`~pydicom.dcmread` or :func:`~pydicom.dcmwrite`
+  is called with wrong argument
+* Gracefully handle empty Specific Character Set (:issue:`1190`)
+* Fixed empty ambiguous VR elements raising an exception (:issue:`1193`)
+* Allow :func:`~pydicom.pixel_data_handlers.util.apply_voi_lut` to apply VOI
+  lookup to an input float array

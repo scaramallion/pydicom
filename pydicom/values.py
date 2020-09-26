@@ -3,15 +3,14 @@
    data elements to proper python types
 """
 
+import re
 from io import BytesIO
 from struct import (unpack, calcsize)
 
 # don't import datetime_conversion directly
 from pydicom import config
-from pydicom import compat
-from pydicom.compat import in_py2
 from pydicom.charset import (default_encoding, text_VRs, decode_string)
-from pydicom.config import logger
+from pydicom.config import logger, have_numpy
 from pydicom.dataelem import empty_value_for_VR
 from pydicom.filereader import read_sequence
 from pydicom.multival import MultiValue
@@ -20,10 +19,14 @@ import pydicom.uid
 import pydicom.valuerep  # don't import DS directly as can be changed by config
 from pydicom.valuerep import (MultiString, DA, DT, TM, TEXT_VR_DELIMS)
 
-if not in_py2:
-    from pydicom.valuerep import PersonName3 as PersonName
-else:
-    from pydicom.valuerep import PersonNameUnicode as PersonName
+
+have_numpy = True
+try:
+    import numpy
+except ImportError:
+    have_numpy = False
+
+from pydicom.valuerep import PersonName  # NOQA
 
 
 def convert_tag(byte_string, is_little_endian, offset=0):
@@ -70,8 +73,7 @@ def convert_AE_string(byte_string, is_little_endian, struct_format=None):
     str
         The decoded 'AE' value without non-significant spaces.
     """
-    if not in_py2:
-        byte_string = byte_string.decode(default_encoding)
+    byte_string = byte_string.decode(default_encoding)
     byte_string = byte_string.strip()
     return byte_string
 
@@ -132,8 +134,7 @@ def convert_DA_string(byte_string, is_little_endian, struct_format=None):
         otherwise returns :class:`str` or ``list`` of ``str``.
     """
     if config.datetime_conversion:
-        if not in_py2:
-            byte_string = byte_string.decode(default_encoding)
+        byte_string = byte_string.decode(default_encoding)
         splitup = byte_string.split("\\")
         if len(splitup) == 1:
             return _DA_from_byte_string(splitup[0])
@@ -146,6 +147,10 @@ def convert_DA_string(byte_string, is_little_endian, struct_format=None):
 def convert_DS_string(byte_string, is_little_endian, struct_format=None):
     """Return a decoded 'DS' value.
 
+    .. versionchanged:: 2.0
+
+        The option to return numpy values was added.
+
     Parameters
     ----------
     byte_string : bytes or str
@@ -157,19 +162,45 @@ def convert_DS_string(byte_string, is_little_endian, struct_format=None):
 
     Returns
     -------
-    valuerep.DSfloat or valuerep.DSdecimal or list of DSfloat/DSdecimal
-        If :attr:`~pydicom.config.use_DS_decimal` is ``True`` then returns
-        :class:`~pydicom.valuerep.DSdecimal` or a :class:`list` of
-        ``DSdecimal``, otherwise returns :class:`~pydicom.valuerep.DSfloat` or
-        a ``list`` of ``DSfloat``.
+    :class:`~pydicom.valuerep.DSfloat`, :class:`~pydicom.valuerep.DSdecimal`, :class:`numpy.float64`, list of DSfloat/DSdecimal or :class:`numpy.ndarray`   of :class:`numpy.float64`
+
+        If :attr:`~pydicom.config.use_DS_decimal` is ``False`` (default),
+        returns a :class:`~pydicom.valuerep.DSfloat` or list of them
+
+        If :attr:`~pydicom.config.use_DS_decimal` is ``True``,
+        returns a :class:`~pydicom.valuerep.DSdecimal` or list of them
+
+        If :data:`~pydicom.config.use_DS_numpy` is ``True``,
+        returns a :class:`numpy.float64` or a :class:`numpy.ndarray` of them
+
+    Raises
+    ------
+    ValueError
+        If :data:`~pydicom.config.use_DS_numpy` is ``True`` and the string
+        contains non-valid characters
+
+    ImportError
+        If :data:`~pydicom.config.use_DS_numpy` is ``True`` and numpy is not
+        available
     """
-    if not in_py2:
-        byte_string = byte_string.decode(default_encoding)
+    num_string = byte_string.decode(default_encoding)
     # Below, go directly to DS class instance
     # rather than factory DS, but need to
     # ensure last string doesn't have
     # blank padding (use strip())
-    return MultiString(byte_string.strip(), valtype=pydicom.valuerep.DSclass)
+    if config.use_DS_numpy:
+        if not have_numpy:
+            raise ImportError("use_DS_numpy set but numpy not installed")
+        # Check for valid characters. Numpy ignores many
+        regex = r'[ \\0-9\.+eE-]*\Z'
+        if re.match(regex, num_string) is None:
+            raise ValueError("DS: char(s) not in repertoire: '{}'".
+                             format(re.sub(regex[:-2], '', num_string)))
+        value = numpy.fromstring(num_string, dtype='f8', sep="\\")
+        if len(value) == 1:  # Don't use array for one number
+            value = value[0]
+        return value
+    return MultiString(num_string.strip(), valtype=pydicom.valuerep.DSclass)
 
 
 def _DT_from_byte_string(byte_string):
@@ -195,14 +226,13 @@ def convert_DT_string(byte_string, is_little_endian, struct_format=None):
     Returns
     -------
     str or list of str or valuerep.DT or list of DT
-        if
+        If
         :attr:`~pydicom.config.datetime_conversion` is ``True`` then returns
         :class:`~pydicom.valuerep.DT` or a :class:`list` of ``DT``, otherwise
         returns :class:`str` or ``list`` of ``str``.
     """
     if config.datetime_conversion:
-        if not in_py2:
-            byte_string = byte_string.decode(default_encoding)
+        byte_string = byte_string.decode(default_encoding)
         splitup = byte_string.split("\\")
         if len(splitup) == 1:
             return _DT_from_byte_string(splitup[0])
@@ -215,6 +245,10 @@ def convert_DT_string(byte_string, is_little_endian, struct_format=None):
 def convert_IS_string(byte_string, is_little_endian, struct_format=None):
     """Return a decoded 'IS' value.
 
+    .. versionchanged:: 2.0
+
+        The option to return numpy values was added.
+
     Parameters
     ----------
     byte_string : bytes or str
@@ -226,12 +260,40 @@ def convert_IS_string(byte_string, is_little_endian, struct_format=None):
 
     Returns
     -------
-    valuerep.IS or list of IS
-        The decoded value(s).
+    :class:`~pydicom.valuerep.IS` or list of them, or :class:`numpy.int64` or :class:`~numpy.ndarray` of them
+
+        If :data:`~pydicom.config.use_IS_numpy` is ``False`` (default), returns
+        a single :class:`~pydicom.valuerep.IS` or a list of them
+
+        If :data:`~pydicom.config.use_IS_numpy` is ``True``, returns
+        a single :class:`numpy.int64` or a :class:`~numpy.ndarray` of them
+
+    Raises
+    ------
+    ValueError
+        If :data:`~pydicom.config.use_IS_numpy` is ``True`` and the string
+        contains non-valid characters
+
+    ImportError
+        If :data:`~pydicom.config.use_IS_numpy` is ``True`` and numpy is not
+        available
     """
-    if not in_py2:
-        byte_string = byte_string.decode(default_encoding)
-    return MultiString(byte_string, valtype=pydicom.valuerep.IS)
+    num_string = byte_string.decode(default_encoding)
+
+    if config.use_IS_numpy:
+        if not have_numpy:
+            raise ImportError("use_IS_numpy set but numpy not installed")
+        # Check for valid characters. Numpy ignores many
+        regex = r'[ \\0-9\.+-]*\Z'
+        if re.match(regex, num_string) is None:
+            raise ValueError("IS: char(s) not in repertoire: '{}'".
+                             format(re.sub(regex[:-2], '', num_string)))
+        value = numpy.fromstring(num_string, dtype='i8', sep=chr(92))  # 92:'\'
+        if len(value) == 1:  # Don't use array for one number
+            value = value[0]
+        return value
+
+    return MultiString(num_string, valtype=pydicom.valuerep.IS)
 
 
 def convert_numbers(byte_string, is_little_endian, struct_format):
@@ -322,19 +384,12 @@ def convert_PN(byte_string, encodings=None):
 
     Returns
     -------
-    valuerep.PersonName3 or list of PersonName3
-        The decoded 'PN' value(s) if using Python 3.
-    valuerep.PersonNameUnicode or list of PersonNameUnicode
-        The decoded 'PN' value(s) if using Python 2.
+    valuerep.PersonName or list of PersonName
+        The decoded 'PN' value(s).
     """
     def get_valtype(x):
-        if not in_py2:
-            return PersonName(x, encodings).decode()
-        return PersonName(x, encodings)
+        return PersonName(x, encodings).decode()
 
-    # XXX - We have to replicate MultiString functionality
-    # here because we can't decode easily here since that
-    # is performed in PersonNameUnicode
     if byte_string.endswith((b' ', b'\x00')):
         byte_string = byte_string[:-1]
 
@@ -366,8 +421,7 @@ def convert_string(byte_string, is_little_endian, struct_format=None):
     str or list of str
         The decoded value(s).
     """
-    if not in_py2:
-        byte_string = byte_string.decode(default_encoding)
+    byte_string = byte_string.decode(default_encoding)
     return MultiString(byte_string)
 
 
@@ -385,17 +439,15 @@ def convert_text(byte_string, encodings=None):
 
     Returns
     -------
-    unicode or list of unicode
-        The decoded value(s) if in Python 2.
     str or list of str
-        The decoded value(s) if in Python 3.
+        The decoded value(s).
     """
     values = byte_string.split(b'\\')
     values = [convert_single_string(value, encodings) for value in values]
     if len(values) == 1:
         return values[0]
     else:
-        return MultiValue(compat.text_type, values)
+        return MultiValue(str, values)
 
 
 def convert_single_string(byte_string, encodings=None):
@@ -410,10 +462,8 @@ def convert_single_string(byte_string, encodings=None):
 
     Returns
     -------
-    unicode or list of unicode
-        The decoded text if in Python 2.
     str or list of str
-        The decoded text if in Python 3.
+        The decoded text.
     """
     encodings = encodings or [default_encoding]
     value = decode_string(byte_string, encodings, TEXT_VR_DELIMS)
@@ -480,8 +530,7 @@ def convert_TM_string(byte_string, is_little_endian, struct_format=None):
         otherwise returns :class:`str` or ``list`` of ``str``.
     """
     if config.datetime_conversion:
-        if not in_py2:
-            byte_string = byte_string.decode(default_encoding)
+        byte_string = byte_string.decode(default_encoding)
         splitup = byte_string.split("\\")
         if len(splitup) == 1:
             return _TM_from_byte_string(splitup[0])
@@ -511,8 +560,7 @@ def convert_UI(byte_string, is_little_endian, struct_format=None):
         The decoded 'UI' element value without a trailing null.
     """
     # Strip off 0-byte padding for even length (if there)
-    if not in_py2:
-        byte_string = byte_string.decode(default_encoding)
+    byte_string = byte_string.decode(default_encoding)
     if byte_string and byte_string.endswith('\0'):
         byte_string = byte_string[:-1]
     return MultiString(byte_string, pydicom.uid.UID)
@@ -543,8 +591,7 @@ def convert_UR_string(byte_string, is_little_endian, struct_format=None):
     bytes or str
         The encoded 'UR' element value without any trailing spaces.
     """
-    if not in_py2:
-        byte_string = byte_string.decode(default_encoding)
+    byte_string = byte_string.decode(default_encoding)
     byte_string = byte_string.rstrip()
     return byte_string
 
@@ -565,6 +612,7 @@ def convert_value(VR, raw_data_element, encodings=None):
     type or list of type
         The element value decoded using the appropriate decoder.
     """
+
     if VR not in converters:
         # `VR` characters are in the ascii alphabet ranges 65 - 90, 97 - 122
         char_range = list(range(65, 91)) + list(range(97, 123))
@@ -588,7 +636,7 @@ def convert_value(VR, raw_data_element, encodings=None):
 
     # Ensure that encodings is a list
     encodings = encodings or [default_encoding]
-    if isinstance(encodings, compat.string_types):
+    if isinstance(encodings, str):
         encodings = [encodings]
 
     byte_string = raw_data_element.value
@@ -659,7 +707,7 @@ converters = {
     'LT': convert_single_string,
     'OB': convert_OBvalue,
     'OD': convert_OBvalue,
-    'OF': (convert_numbers, 'f'),
+    'OF': convert_OWvalue,
     'OL': convert_OBvalue,
     'OW': convert_OWvalue,
     'OV': convert_OVvalue,

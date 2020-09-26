@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for the GDCM Pixel Data handler."""
 
+from io import BytesIO
 import os
 import sys
 import tempfile
@@ -11,10 +12,12 @@ import pytest
 
 import pydicom
 from pydicom.filereader import dcmread
-from pydicom.data import get_testdata_files
-from pydicom.pixel_data_handlers.util import _convert_YBR_FULL_to_RGB
+from pydicom.data import get_testdata_file
+from pydicom.encaps import defragment_data
+from pydicom.pixel_data_handlers.util import (
+    _convert_YBR_FULL_to_RGB, get_j2k_parameters
+)
 from pydicom.tag import Tag
-from pydicom import compat
 
 gdcm_missing_message = "GDCM is not available in this test environment"
 gdcm_im_missing_message = "GDCM is not available or in-memory decoding"\
@@ -44,79 +47,64 @@ if HAVE_GDCM:
     import gdcm
 
 
-empty_number_tags_name = get_testdata_files(
-    "reportsi_with_empty_number_tags.dcm")[0]
-rtplan_name = get_testdata_files("rtplan.dcm")[0]
-rtdose_name = get_testdata_files("rtdose.dcm")[0]
-ct_name = get_testdata_files("CT_small.dcm")[0]
-mr_name = get_testdata_files("MR_small.dcm")[0]
-truncated_mr_name = get_testdata_files("MR_truncated.dcm")[0]
-jpeg2000_name = get_testdata_files("JPEG2000.dcm")[0]
-jpeg2000_lossless_name = get_testdata_files(
-    "MR_small_jp2klossless.dcm")[0]
-jpeg_ls_lossless_name = get_testdata_files(
-    "MR_small_jpeg_ls_lossless.dcm")[0]
-jpeg_lossy_name = get_testdata_files("JPEG-lossy.dcm")[0]
-jpeg_lossless_name = get_testdata_files("JPEG-LL.dcm")[0]
-jpeg_lossless_odd_data_size_name = get_testdata_files(
-    'SC_rgb_small_odd_jpeg.dcm')[0]
-deflate_name = get_testdata_files("image_dfl.dcm")[0]
-rtstruct_name = get_testdata_files("rtstruct.dcm")[0]
-priv_SQ_name = get_testdata_files("priv_SQ.dcm")[0]
-nested_priv_SQ_name = get_testdata_files("nested_priv_SQ.dcm")[0]
-meta_missing_tsyntax_name = get_testdata_files(
-    "meta_missing_tsyntax.dcm")[0]
-no_meta_group_length = get_testdata_files(
-    "no_meta_group_length.dcm")[0]
-gzip_name = get_testdata_files("zipMR.gz")[0]
-color_px_name = get_testdata_files("color-px.dcm")[0]
-color_pl_name = get_testdata_files("color-pl.dcm")[0]
-explicit_vr_le_no_meta = get_testdata_files(
-    "ExplVR_LitEndNoMeta.dcm")[0]
-explicit_vr_be_no_meta = get_testdata_files(
-    "ExplVR_BigEndNoMeta.dcm")[0]
-emri_name = get_testdata_files("emri_small.dcm")[0]
-emri_big_endian_name = get_testdata_files(
-    "emri_small_big_endian.dcm")[0]
-emri_jpeg_ls_lossless = get_testdata_files(
-    "emri_small_jpeg_ls_lossless.dcm")[0]
-emri_jpeg_2k_lossless = get_testdata_files(
-    "emri_small_jpeg_2k_lossless.dcm")[0]
-color_3d_jpeg_baseline = get_testdata_files(
-    "color3d_jpeg_baseline.dcm")[0]
-sc_rgb_jpeg_dcmtk_411_YBR_FULL_422 = get_testdata_files(
-    "SC_rgb_dcmtk_+eb+cy+np.dcm")[0]
-sc_rgb_jpeg_dcmtk_411_YBR_FULL = get_testdata_files(
-    "SC_rgb_dcmtk_+eb+cy+n1.dcm")[0]
-sc_rgb_jpeg_dcmtk_422_YBR_FULL = get_testdata_files(
-    "SC_rgb_dcmtk_+eb+cy+n2.dcm")[0]
-sc_rgb_jpeg_dcmtk_444_YBR_FULL = get_testdata_files(
-    "SC_rgb_dcmtk_+eb+cy+s4.dcm")[0]
-sc_rgb_jpeg_dcmtk_422_YBR_FULL_422 = get_testdata_files(
-    "SC_rgb_dcmtk_+eb+cy+s2.dcm")[0]
-sc_rgb_jpeg_dcmtk_RGB = get_testdata_files(
-    "SC_rgb_dcmtk_+eb+cr.dcm")[0]
-sc_rgb_jpeg2k_gdcm_KY = get_testdata_files(
-    "SC_rgb_gdcm_KY.dcm")[0]
-ground_truth_sc_rgb_jpeg2k_gdcm_KY_gdcm = get_testdata_files(
-    "SC_rgb_gdcm2k_uncompressed.dcm")[0]
+empty_number_tags_name = get_testdata_file(
+    "reportsi_with_empty_number_tags.dcm")
+rtplan_name = get_testdata_file("rtplan.dcm")
+rtdose_name = get_testdata_file("rtdose.dcm")
+ct_name = get_testdata_file("CT_small.dcm")
+mr_name = get_testdata_file("MR_small.dcm")
+truncated_mr_name = get_testdata_file("MR_truncated.dcm")
+jpeg2000_name = get_testdata_file("JPEG2000.dcm")
+jpeg2000_lossless_name = get_testdata_file("MR_small_jp2klossless.dcm")
+jpeg_ls_lossless_name = get_testdata_file("MR_small_jpeg_ls_lossless.dcm")
+jpeg_lossy_name = get_testdata_file("JPEG-lossy.dcm")
+jpeg_lossless_name = get_testdata_file("JPEG-LL.dcm")
+jpeg_lossless_odd_data_size_name = get_testdata_file(
+    'SC_rgb_small_odd_jpeg.dcm')
+deflate_name = get_testdata_file("image_dfl.dcm")
+rtstruct_name = get_testdata_file("rtstruct.dcm")
+priv_SQ_name = get_testdata_file("priv_SQ.dcm")
+nested_priv_SQ_name = get_testdata_file("nested_priv_SQ.dcm")
+meta_missing_tsyntax_name = get_testdata_file("meta_missing_tsyntax.dcm")
+no_meta_group_length = get_testdata_file("no_meta_group_length.dcm")
+gzip_name = get_testdata_file("zipMR.gz")
+color_px_name = get_testdata_file("color-px.dcm")
+color_pl_name = get_testdata_file("color-pl.dcm")
+explicit_vr_le_no_meta = get_testdata_file("ExplVR_LitEndNoMeta.dcm")
+explicit_vr_be_no_meta = get_testdata_file("ExplVR_BigEndNoMeta.dcm")
+emri_name = get_testdata_file("emri_small.dcm")
+emri_big_endian_name = get_testdata_file("emri_small_big_endian.dcm")
+emri_jpeg_ls_lossless = get_testdata_file(
+    "emri_small_jpeg_ls_lossless.dcm")
+emri_jpeg_2k_lossless = get_testdata_file(
+    "emri_small_jpeg_2k_lossless.dcm")
+color_3d_jpeg_baseline = get_testdata_file("color3d_jpeg_baseline.dcm")
+sc_rgb_jpeg_dcmtk_411_YBR_FULL_422 = get_testdata_file(
+    "SC_rgb_dcmtk_+eb+cy+np.dcm")
+sc_rgb_jpeg_dcmtk_411_YBR_FULL = get_testdata_file(
+    "SC_rgb_dcmtk_+eb+cy+n1.dcm")
+sc_rgb_jpeg_dcmtk_422_YBR_FULL = get_testdata_file(
+    "SC_rgb_dcmtk_+eb+cy+n2.dcm")
+sc_rgb_jpeg_dcmtk_444_YBR_FULL = get_testdata_file(
+    "SC_rgb_dcmtk_+eb+cy+s4.dcm")
+sc_rgb_jpeg_dcmtk_422_YBR_FULL_422 = get_testdata_file(
+    "SC_rgb_dcmtk_+eb+cy+s2.dcm")
+sc_rgb_jpeg_dcmtk_RGB = get_testdata_file("SC_rgb_dcmtk_+eb+cr.dcm")
+sc_rgb_jpeg2k_gdcm_KY = get_testdata_file("SC_rgb_gdcm_KY.dcm")
+ground_truth_sc_rgb_jpeg2k_gdcm_KY_gdcm = get_testdata_file(
+    "SC_rgb_gdcm2k_uncompressed.dcm"
+)
+J2KR_16_13_1_1_1F_M2_MISMATCH = get_testdata_file("J2K_pixelrep_mismatch.dcm")
 
 dir_name = os.path.dirname(sys.argv[0])
 save_dir = os.getcwd()
 
 
-class TestGDCM_JPEG_LS_no_gdcm(object):
+class TestGDCM_JPEG_LS_no_gdcm:
     def setup(self):
-        if compat.in_py2:
-            self.utf8_filename = os.path.join(
-                tempfile.gettempdir(), "ДИКОМ.dcm")
-            self.unicode_filename = self.utf8_filename.decode("utf8")
-            shutil.copyfile(jpeg_ls_lossless_name.decode("utf8"),
-                            self.unicode_filename)
-        else:
-            self.unicode_filename = os.path.join(
-                tempfile.gettempdir(), "ДИКОМ.dcm")
-            shutil.copyfile(jpeg_ls_lossless_name, self.unicode_filename)
+        self.unicode_filename = os.path.join(
+            tempfile.gettempdir(), "ДИКОМ.dcm")
+        shutil.copyfile(jpeg_ls_lossless_name, self.unicode_filename)
         self.jpeg_ls_lossless = dcmread(self.unicode_filename)
         self.mr_small = dcmread(mr_name)
         self.emri_jpeg_ls_lossless = dcmread(emri_jpeg_ls_lossless)
@@ -137,7 +125,7 @@ class TestGDCM_JPEG_LS_no_gdcm(object):
             self.emri_jpeg_ls_lossless.pixel_array
 
 
-class TestGDCM_JPEG2000_no_gdcm(object):
+class TestGDCM_JPEG2000_no_gdcm:
     def setup(self):
         self.jpeg_2k = dcmread(jpeg2000_name)
         self.jpeg_2k_lossless = dcmread(jpeg2000_lossless_name)
@@ -175,7 +163,7 @@ class TestGDCM_JPEG2000_no_gdcm(object):
             self.sc_rgb_jpeg2k_gdcm_KY.pixel_array
 
 
-class TestGDCM_JPEGlossy_no_gdcm(object):
+class TestGDCM_JPEGlossy_no_gdcm:
     def setup(self):
         self.jpeg_lossy = dcmread(jpeg_lossy_name)
         self.color_3d_jpeg = dcmread(color_3d_jpeg_baseline)
@@ -200,7 +188,7 @@ class TestGDCM_JPEGlossy_no_gdcm(object):
             self.color_3d_jpeg.pixel_array
 
 
-class TestGDCM_JPEGlossless_no_gdcm(object):
+class TestGDCM_JPEGlossless_no_gdcm:
     def setup(self):
         self.jpeg_lossless = dcmread(jpeg_lossless_name)
         self.original_handlers = pydicom.config.pixel_data_handlers
@@ -382,7 +370,7 @@ else:
         with_gdcm_params = []
 
 
-class TestsWithGDCM(object):
+class TestsWithGDCM:
     @pytest.fixture(params=with_gdcm_params, scope='class', autouse=True)
     def with_gdcm(self, request):
         original_value = HAVE_GDCM_IN_MEMORY_SUPPORT
@@ -396,15 +384,9 @@ class TestsWithGDCM(object):
 
     @pytest.fixture(scope='class')
     def unicode_filename(self):
-        if compat.in_py2:
-            utf8_filename = os.path.join(tempfile.gettempdir(), "ДИКОМ.dcm")
-            unicode_filename = utf8_filename.decode("utf8")
-            shutil.copyfile(jpeg_ls_lossless_name.decode("utf8"),
-                            unicode_filename)
-        else:
-            unicode_filename = os.path.join(
-                tempfile.gettempdir(), "ДИКОМ.dcm")
-            shutil.copyfile(jpeg_ls_lossless_name, unicode_filename)
+        unicode_filename = os.path.join(
+            tempfile.gettempdir(), "ДИКОМ.dcm")
+        shutil.copyfile(jpeg_ls_lossless_name, unicode_filename)
         yield unicode_filename
         os.remove(unicode_filename)
 
@@ -586,8 +568,43 @@ class TestsWithGDCM(object):
         assert results[9] == tuple(a[95, 50, :])
         assert PhotometricInterpretation == t.PhotometricInterpretation
 
+    def test_bytes_io(self):
+        """Test using a BytesIO as the dataset source."""
+        with open(jpeg2000_name, 'rb') as f:
+            bs = BytesIO(f.read())
 
-class TestSupportFunctions(object):
+        ds = dcmread(bs)
+        arr = ds.pixel_array
+        assert (1024, 256) == arr.shape
+        assert arr.flags.writeable
+
+    def test_pixel_rep_mismatch(self):
+        """Test mismatched j2k sign and Pixel Representation."""
+        ds = dcmread(J2KR_16_13_1_1_1F_M2_MISMATCH)
+        assert 1 == ds.PixelRepresentation
+        assert 13 == ds.BitsStored
+
+        bs = defragment_data(ds.PixelData)
+        params = get_j2k_parameters(bs)
+        assert 13 == params["precision"]
+        assert not params["is_signed"]
+        arr = ds.pixel_array
+
+        assert 'int16' == arr.dtype
+        assert (512, 512) == arr.shape
+        assert arr.flags.writeable
+
+        assert -2000 == arr[0, 0]
+        assert [621, 412, 138, -193, -520, -767, -907, -966, -988, -995] == (
+            arr[47:57, 279].tolist()
+        )
+        assert [-377, -121, 141, 383, 633, 910, 1198, 1455, 1638, 1732] == (
+            arr[328:338, 106].tolist()
+        )
+
+
+
+class TestSupportFunctions:
     @pytest.fixture(scope='class')
     def dataset_2d(self):
         return dcmread(mr_name)
@@ -681,15 +698,8 @@ class TestSupportFunctions(object):
         assert planar == image.GetPlanarConfiguration()
 
     @pytest.mark.skipif(not HAVE_GDCM, reason=gdcm_missing_message)
-    def test_create_image_reader_with_string(self):
-        image_reader = gdcm_handler.create_image_reader(mr_name)
-        assert image_reader is not None
-        assert image_reader.Read()
-
-    @pytest.mark.skipif(not HAVE_GDCM, reason=gdcm_missing_message)
-    @pytest.mark.skipif(not compat.in_py2, reason='Python2 specific')
-    def test_create_image_reader_with_py2_unicode_string(self):
-        filename = mr_name.decode('utf-8')
-        image_reader = gdcm_handler.create_image_reader(filename)
+    def test_create_image_reader(self):
+        ds = dcmread(mr_name)
+        image_reader = gdcm_handler.create_image_reader(ds)
         assert image_reader is not None
         assert image_reader.Read()

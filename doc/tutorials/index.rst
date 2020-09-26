@@ -13,5 +13,8 @@ New to *pydicom*? Then these tutorials should get you up and running.
    virtualenvs
    dataset_basics
    dataset_from_scratch
+   sr_basics
+   dicom_json
+   waveforms
    contributing_code
    contributing_docs

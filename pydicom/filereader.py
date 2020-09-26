@@ -1,7 +1,6 @@
 # Copyright 2008-2018 pydicom authors. See LICENSE file for details.
 """Read a dicom media file"""
 
-from __future__ import absolute_import
 
 # Need zlib and io.BytesIO for deflate-compressed file
 from io import BytesIO
@@ -10,21 +9,17 @@ from struct import (Struct, unpack)
 import warnings
 import zlib
 
-from pydicom import compat  # don't import datetime_conversion directly
 from pydicom import config
 from pydicom.charset import (default_encoding, convert_encodings)
-from pydicom.compat import in_py2
 from pydicom.config import logger
 from pydicom.datadict import dictionary_VR, tag_for_keyword
 from pydicom.dataelem import (DataElement, RawDataElement,
                               DataElement_from_raw, empty_value_for_VR)
-from pydicom.dataset import (Dataset, FileDataset)
+from pydicom.dataset import (Dataset, FileDataset, FileMetaDataset)
 from pydicom.dicomdir import DicomDir
 from pydicom.errors import InvalidDicomError
 from pydicom.filebase import DicomFile
-from pydicom.fileutil import read_undefined_length_value
-from pydicom.media_storage import (ImageStorage, SRDocumentStorage,
-                                   WaveformStorage)
+from pydicom.fileutil import read_undefined_length_value, path_from_pathlike
 from pydicom.misc import size_in_bytes
 from pydicom.sequence import Sequence
 from pydicom.tag import (ItemTag, SequenceDelimiterTag, TupleTag, Tag, BaseTag)
@@ -123,7 +118,7 @@ def data_element_generator(fp,
     tag_set = set()
     if specific_tags is not None:
         for tag in specific_tags:
-            if isinstance(tag, (str, compat.text_type)):
+            if isinstance(tag, str):
                 tag = Tag(tag_for_keyword(tag))
             if isinstance(tag, BaseTag):
                 tag_set.add(tag)
@@ -145,8 +140,7 @@ def data_element_generator(fp,
             group, elem, length = element_struct_unpack(bytes_read)
         else:  # explicit VR
             group, elem, VR, length = element_struct_unpack(bytes_read)
-            if not in_py2:
-                VR = VR.decode(default_encoding)
+            VR = VR.decode(default_encoding)
             if VR in extra_length_VRs:
                 bytes_read = fp_read(4)
                 length = extra_length_unpack(bytes_read)[0]
@@ -207,7 +201,7 @@ def data_element_generator(fp,
             # If the tag is (0008,0005) Specific Character Set, then store it
             if tag == BaseTag(0x00080005):
                 from pydicom.values import convert_string
-                encoding = convert_string(value, is_little_endian)
+                encoding = convert_string(value or b'', is_little_endian)
                 # Store the encoding value in the generator
                 # for use with future elements (SQs)
                 encoding = convert_encodings(encoding)
@@ -253,15 +247,6 @@ def data_element_generator(fp,
                 value = read_undefined_length_value(fp, is_little_endian,
                                                     delimiter, defer_size)
 
-                # If the tag is (0008,0005) Specific Character Set,
-                # then store it
-                if tag == (0x08, 0x05):
-                    from pydicom.values import convert_string
-                    encoding = convert_string(value, is_little_endian)
-                    # Store the encoding value in the generator for use
-                    # with future elements (SQs)
-                    encoding = convert_encodings(encoding)
-
                 # tags with undefined length are skipped after read
                 if has_tag_set and tag not in tag_set:
                     continue
@@ -299,9 +284,7 @@ def _is_implicit_vr(fp, implicit_vr_is_assumed, is_little_endian, stop_when):
     # extremely unlikely that the tag length accidentally has such a
     # representation - this would need the first tag to be longer than 16kB
     # (e.g. it should be > 0x4141 = 16705 bytes)
-    vr1 = ord(vr[0]) if in_py2 else vr[0]
-    vr2 = ord(vr[1]) if in_py2 else vr[1]
-    found_implicit = not (0x40 < vr1 < 0x5B and 0x40 < vr2 < 0x5B)
+    found_implicit = not (0x40 < vr[0] < 0x5B and 0x40 < vr[1] < 0x5B)
 
     if found_implicit != implicit_vr_is_assumed:
         # first check if the tag still belongs to the dataset if stop_when
@@ -396,7 +379,7 @@ def read_dataset(fp, is_implicit_VR, is_little_endian, bytelength=None,
 
     ds = Dataset(raw_data_elements)
     if 0x00080005 in raw_data_elements:
-        char_set = DataElement_from_raw(raw_data_elements[0x00080005])
+        char_set = DataElement_from_raw(raw_data_elements[0x00080005]).value
         encoding = convert_encodings(char_set)
     else:
         encoding = parent_encoding
@@ -533,8 +516,12 @@ def _read_file_meta_info(fp):
         return tag.group != 2
 
     start_file_meta = fp.tell()
-    file_meta = read_dataset(fp, is_implicit_VR=False, is_little_endian=True,
-                             stop_when=_not_group_0002)
+    file_meta = FileMetaDataset(
+                    read_dataset(
+                        fp, is_implicit_VR=False, is_little_endian=True,
+                        stop_when=_not_group_0002
+                    )
+    )
     if not file_meta._dict:
         return file_meta
 
@@ -545,9 +532,12 @@ def _read_file_meta_info(fp):
         file_meta[list(file_meta.elements())[0].tag]
     except NotImplementedError:
         fp.seek(start_file_meta)
-        file_meta = read_dataset(fp, is_implicit_VR=True,
-                                 is_little_endian=True,
-                                 stop_when=_not_group_0002)
+        file_meta = FileMetaDataset(
+                        read_dataset(
+                            fp, is_implicit_VR=True, is_little_endian=True,
+                            stop_when=_not_group_0002
+                        )
+        )
 
     # Log if the Group Length doesn't match actual length
     if 'FileMetaInformationGroupLength' in file_meta:
@@ -708,8 +698,7 @@ def read_partial(fileobj, stop_when=None, defer_size=None,
 
         # Test the VR to see if it's valid, and if so then assume explicit VR
         from pydicom.values import converters
-        if not in_py2:
-            VR = VR.decode(default_encoding)
+        VR = VR.decode(default_encoding)
         if VR in converters.keys():
             is_implicit_VR = False
             # Big endian encoding can only be explicit VR
@@ -728,7 +717,7 @@ def read_partial(fileobj, stop_when=None, defer_size=None,
         is_implicit_VR = False
         is_little_endian = False
     elif transfer_syntax == pydicom.uid.DeflatedExplicitVRLittleEndian:
-        # See PS3.6-2008 A.5 (p 71)
+        # See PS3.5 section A.5
         # when written, the entire dataset following
         #     the file metadata was prepared the normal way,
         #     then "deflate" compression applied.
@@ -764,12 +753,6 @@ def read_partial(fileobj, stop_when=None, defer_size=None,
     class_uid = file_meta_dataset.get("MediaStorageSOPClassUID", None)
     if class_uid and class_uid.name == "Media Storage Directory Storage":
         dataset_class = DicomDir
-    elif class_uid and class_uid.name.endswith("SR Storage"):
-        dataset_class = SRDocumentStorage
-    elif class_uid and class_uid.name.endswith("Image Storage"):
-        dataset_class = ImageStorage
-    elif class_uid and class_uid.name.endswith("Waveform Storage"):
-        dataset_class = WaveformStorage
     else:
         dataset_class = FileDataset
     new_dataset = dataset_class(fileobj, dataset, preamble, file_meta_dataset,
@@ -793,7 +776,7 @@ def dcmread(fp, defer_size=None, stop_before_pixels=False,
 
     Parameters
     ----------
-    fp : str or file-like
+    fp : str or PathLike or file-like
         Either a file-like object, or a string containing the file name. If a
         file-like object, the caller is responsible for closing it.
     defer_size : int or str or None, optional
@@ -826,6 +809,8 @@ def dcmread(fp, defer_size=None, stop_before_pixels=False,
     ------
     InvalidDicomError
         If `force` is ``True`` and the file is not a valid DICOM file.
+    TypeError
+        If `fp` is ``None`` or of an unsupported type.
 
     See Also
     --------
@@ -853,14 +838,15 @@ def dcmread(fp, defer_size=None, stop_before_pixels=False,
     """
     # Open file if not already a file object
     caller_owns_file = True
-    if isinstance(fp, compat.string_types):
+    fp = path_from_pathlike(fp)
+    if isinstance(fp, str):
         # caller provided a file name; we own the file handle
         caller_owns_file = False
-        try:
-            logger.debug(u"Reading file '{0}'".format(fp))
-        except Exception:
-            logger.debug("Reading file '{0}'".format(fp))
+        logger.debug("Reading file '{0}'".format(fp))
         fp = open(fp, 'rb')
+    elif fp is None or not hasattr(fp, "read") or not hasattr(fp, "seek"):
+        raise TypeError("dcmread: Expected a file path or a file-like, "
+                        "but got " + type(fp).__name__)
 
     if config.debugging:
         logger.debug("\n" + "-" * 80)
@@ -920,7 +906,7 @@ def read_dicomdir(filename="DICOMDIR"):
     ds = dcmread(filename)
     # Here, check that it is in fact DicomDir
     if not isinstance(ds, DicomDir):
-        msg = u"File '{0}' is not a Media Storage Directory file".format(
+        msg = "File '{0}' is not a Media Storage Directory file".format(
             filename)
         raise InvalidDicomError(msg)
     return ds
@@ -980,11 +966,11 @@ def read_deferred_data_element(fileobj_type, filename_or_obj, timestamp,
     if filename_or_obj is None:
         raise IOError("Deferred read -- original filename not stored. "
                       "Cannot re-open")
-    is_filename = isinstance(filename_or_obj, compat.string_types)
+    is_filename = isinstance(filename_or_obj, str)
 
     # Check that the file is the same as when originally read
     if is_filename and not os.path.exists(filename_or_obj):
-        raise IOError(u"Deferred read -- original file "
+        raise IOError("Deferred read -- original file "
                       "{0:s} is missing".format(filename_or_obj))
     if timestamp is not None:
         statinfo = os.stat(filename_or_obj)

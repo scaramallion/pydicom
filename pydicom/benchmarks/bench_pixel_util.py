@@ -2,19 +2,19 @@
 """Benchmarks for the pixel data utilities."""
 
 from pydicom import dcmread
-from pydicom.data import get_testdata_files
+from pydicom.data import get_testdata_file
 from pydicom.pixel_data_handlers.util import convert_color_space
 
 
-class TimeConvertColorSpace(object):
+class TimeConvertColorSpace:
     """Benchmarks for utils.convert_color_space()."""
     def setup(self):
         """Setup the benchmark."""
         self.no_runs = 1000
 
-        ds = dcmread(get_testdata_files('SC_rgb_gdcm2k_uncompressed.dcm')[0])
+        ds = dcmread(get_testdata_file('SC_rgb_gdcm2k_uncompressed.dcm'))
         self.rgb = ds.pixel_array
-        ds = dcmread(get_testdata_files('SC_ybr_full_uncompressed.dcm')[0])
+        ds = dcmread(get_testdata_file('SC_ybr_full_uncompressed.dcm'))
         self.ybr_full = ds.pixel_array
 
     def time_rgb_ybr(self):

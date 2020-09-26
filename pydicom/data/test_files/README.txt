@@ -1,4 +1,8 @@
 Test Files used for testing pydicom
+
+2020-06 Many files were moved to an external data store,
+and are downloaded as needed.
+
 -----------------------------------
 I obtained images to test the pydicom code, and revised them as follow:
   * images were often downsized to keep the total file size quite small (typically <50K-ish). I wanted unittests for the code where I could run a number of tests quickly, and with files I could include in the source (and binary) distributions without bloating them too much
@@ -41,6 +45,12 @@ rtstruct.dcm            : Impl VR Little Endian
   * JPEG2000, JPEG2000Lossless and uncompressed versions
   * Mismatch between BitsStored and sample bit depth
 
+bad_sequence.dcm
+   * Anonymized test dataset for issue #1067, provided by @sylvainKritter
+   * JPEGLossless:Non-hierarchical-1stOrderPrediction
+   * contains invalid sequence (encoded as Implicit Little Endian) with VR
+   "UN"
+
 CT_small.dcm
   * CT image, Explicit VR, LittleEndian
   * Downsized to 128x128 from 'CT1_UNC', ftp://medical.nema.org/MEDICAL/Dicom/DataSets/WG04/
@@ -50,6 +60,16 @@ eCT_Supplemental.dcm
   * Taken from ftp://medical.nema.org/medical/dicom/Multiframe/CT/nemamfct.images.tar.bz2
   * 2 frames, 16 bits allocated/stored, MONOCHROME2
   * Enhanced CT with supplemental (at IV 1024) 16-bit palette colour LUT data
+
+GDCMJ2K_TextGBR.dcm (from GDCM)
+  * JPEG 2000 Lossless transfer syntax
+  * Contains non-conformant Pixel Data with a JP2 header
+  * unsigned 8-bit, 3 samples/px, YBR_RCT Photometric Interpretation
+
+J2K_pixelrep_mismatch.dcm
+  * Dataset from issue 1149
+  * J2K data is unsigned, Pixel Representation 1
+  * Bits Stored is 13
 
 MR_small.dcm
   * MR image, Explicit VR, LittleEndian
@@ -66,6 +86,14 @@ MR2_*.dcm
   * JPEG2000, JPEG2000Lossless and uncompressed versions
   * unsigned 16-bit/12-bit with rescale and windowing
   * From ftp://medical.nema.org/MEDICAL/Dicom/DataSets/WG04
+
+JPGExtended.dcm
+  * 1.2.840.10008.1.2.4.51 - JPEG Extended
+  * Fixed version of JPEG-lossy.dcm
+
+JPGLosslessP14SV1_1s_1f_8b.dcm
+  * 1.2.840.10008.1.2.4.70 - JPEG Lossless, Process 14, Selection Value 1
+  * 1 sample/px, 1 frame, 8-bits stored, monochrome2
 
 JPEG2000.dcm and JPEG2000_UNC.dcm (uncompressed version)
   * JPEG 2000 small image
@@ -99,6 +127,11 @@ JPEG-lossy.dcm
   * 1.2.840.10008.1.2.4.51 Default Transfer Syntax for Lossy JPEG 12-bit
   * GDCM prints when reading this file: "Unsupported JPEG data precision 12" and "Invalid SOS parameters for sequential JPEG", although it does appear to be read properly
 
+JPEG2000-embedded-sequence-delimiter.dcm
+  * A copy of JPEG2000.dcm, with 4 of the encoded pixel data bytes replaced with the Sequence Delimiter
+  * Almost certainly not a valid JPEG anymore, but the DICOM structure is valid
+  * Used to reproduce #1140.
+
 liver.dcm
   * The DICOM SEG example was generated using the dcmqi library: https://github.com/qiicr/dcmqi
   * Provided by Andrey Fedorov (@fedorov)
@@ -110,7 +143,7 @@ mlut_18.dcm
   * Modality LUT Sequence
   * One of the IHE (https://wiki.ihe.net/index.php/Main_Page) MESA display test
     images
-    
+
 no_meta.dcm
     * Same as CT_small.dcm with no File Meta Information header
 
@@ -126,6 +159,10 @@ chr*.dcm
   * Character set files for testing (0008,0005) Specific Character Set
   * from http://www.dclunie.com/images/charset/SCS*
   * downsized to 32x32 since pixel data is irrelevant for these (test pattern only)
+
+empty_charset_LEI.dcm
+  * Dataset with empty Specific Character Set, regression dataset for #1038
+  * provided by @micjuel
 
 test-SR.dcm
   * from ftp://ftp.dcmtk.org/pub/dicom/offis/software/dscope/dscope360/support/srdoc103.zip, file "test.dcm"

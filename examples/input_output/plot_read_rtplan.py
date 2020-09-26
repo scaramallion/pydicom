@@ -10,10 +10,8 @@ Given an RTPLAN DICOM file, list basic info for the beams in it.
 # authors : Guillaume Lemaitre <g.lemaitre58@gmail.com>
 # license : MIT
 
-from __future__ import print_function
-
 import pydicom
-from pydicom.data import get_testdata_files
+from pydicom.data import get_testdata_file
 
 print(__doc__)
 
@@ -32,6 +30,6 @@ def list_beams(plan_dataset):
     return "\n".join(lines)
 
 
-filename = get_testdata_files('rtplan.dcm')[0]
+filename = get_testdata_file('rtplan.dcm')
 dataset = pydicom.dcmread(filename)
 print(list_beams(dataset))

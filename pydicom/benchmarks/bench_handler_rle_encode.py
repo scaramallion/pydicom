@@ -1,30 +1,28 @@
 # Copyright 2008-2018 pydicom authors. See LICENSE file for details.
 """Encoding benchmarks for the rle_handler module."""
 
-import numpy as np
-
 from pydicom import dcmread
-from pydicom.data import get_testdata_files
+from pydicom.data import get_testdata_file
 from pydicom.pixel_data_handlers.rle_handler import (
     rle_encode_frame,
     _rle_encode_segment,
 )
 
 # 8/8-bit, 1 sample/pixel, 1 frame
-EXPL_8_1_1F = get_testdata_files("OBXXXX1A.dcm")[0]
+EXPL_8_1_1F = get_testdata_file("OBXXXX1A.dcm")
 # 8/8-bit, 3 sample/pixel, 1 frame
-EXPL_8_3_1F = get_testdata_files("SC_rgb.dcm")[0]
+EXPL_8_3_1F = get_testdata_file("SC_rgb.dcm")
 # 16/16-bit, 1 sample/pixel, 1 frame
-EXPL_16_1_1F = get_testdata_files("MR_small.dcm")[0]
+EXPL_16_1_1F = get_testdata_file("MR_small.dcm")
 # 16/16-bit, 3 sample/pixel, 1 frame
-EXPL_16_3_1F = get_testdata_files("SC_rgb_16bit.dcm")[0]
+EXPL_16_3_1F = get_testdata_file("SC_rgb_16bit.dcm")
 # 32/32-bit, 1 sample/pixel, 1 frame
-EXPL_32_1_1F = get_testdata_files("rtdose_1frame.dcm")[0]
+EXPL_32_1_1F = get_testdata_file("rtdose_1frame.dcm")
 # 32/32-bit, 3 sample/pixel, 1 frame
-EXPL_32_3_1F = get_testdata_files("SC_rgb_32bit.dcm")[0]
+EXPL_32_3_1F = get_testdata_file("SC_rgb_32bit.dcm")
 
 
-class TimeRLEEncodeSegment(object):
+class TimeRLEEncodeSegment:
     """Time tests for rle_handler._rle_encode_segment."""
     def setup(self):
         ds = dcmread(EXPL_8_1_1F)
@@ -39,7 +37,7 @@ class TimeRLEEncodeSegment(object):
             _rle_encode_segment(self.arr)
 
 
-class TimeRLEEncodeFrame(object):
+class TimeRLEEncodeFrame:
     """Time tests for rle_handler.rle_encode_frame."""
     def setup(self):
         ds = dcmread(EXPL_8_1_1F)

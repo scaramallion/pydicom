@@ -4,7 +4,7 @@
 import pytest
 from pydicom.multival import MultiValue
 from pydicom.valuerep import DS, DSfloat, DSdecimal, IS
-from pydicom import config, compat
+from pydicom import config
 from copy import deepcopy
 
 import sys
@@ -12,7 +12,7 @@ import sys
 python_version = sys.version_info
 
 
-class TestMultiValue(object):
+class TestMultiValue:
     def testMultiDS(self):
         """MultiValue: Multi-valued data elements can be created........"""
         multival = MultiValue(DS, ['11.1', '22.2', '33.3'])
@@ -35,14 +35,11 @@ class TestMultiValue(object):
         assert not multival
         assert 0 == len(multival)
 
-    def testLimits(self):
+    def testLimits(self, enforce_valid_values):
         """MultiValue: Raise error if any item outside DICOM limits...."""
-        original_flag = config.enforce_valid_values
-        config.enforce_valid_values = True
         with pytest.raises(OverflowError):
             MultiValue(IS, [1, -2 ** 31 - 1])
         # Overflow error not raised for IS out of DICOM valid range
-        config.enforce_valid_values = original_flag
 
     def testAppend(self):
         """MultiValue: Append of item converts it to required type..."""
@@ -131,7 +128,7 @@ class TestMultiValue(object):
         """MultiValue: test print output"""
         multival = MultiValue(IS, [])
         assert '' == str(multival)
-        multival = MultiValue(compat.text_type, [1, 2, 3])
+        multival = MultiValue(str, [1, 2, 3])
         assert "['1', '2', '3']" == str(multival)
         multival = MultiValue(int, [1, 2, 3])
         assert '[1, 2, 3]' == str(multival)

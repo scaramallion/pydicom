@@ -34,7 +34,6 @@ from pydicom.dataset import Dataset, FileDataset
 from pydicom.filereader import dcmread, read_file
 from pydicom.filewriter import dcmwrite, write_file
 from pydicom.sequence import Sequence
-from pydicom.codedict import codes
 
 from ._version import __version__, __version_info__
 
@@ -49,8 +48,3 @@ __all__ = ['DataElement',
            '__version__',
            '__version_info__']
 
-from pydicom.compat import in_py2
-if in_py2:
-    import warnings
-    msg = 'Python 2 will no longer be supported after the pydicom v1.4 release'
-    warnings.warn(msg, DeprecationWarning)

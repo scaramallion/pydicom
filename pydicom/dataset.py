@@ -14,7 +14,7 @@ Dataset (dict subclass)
         * A Sequence (list subclass), where each item is a Dataset which
             contains its own DataElements, and so on in a recursive manner.
 """
-
+import copy
 from bisect import bisect_left
 import io
 import inspect  # for __dir__
@@ -22,12 +22,19 @@ from itertools import takewhile
 import json
 import os
 import os.path
+from typing import Generator, TYPE_CHECKING
 import warnings
+
+if TYPE_CHECKING:
+    try:
+        import numpy as np
+    except ImportError:
+        pass
 
 import pydicom  # for dcmwrite
 import pydicom.charset
 import pydicom.config
-from pydicom import compat, datadict, jsonrep
+from pydicom import datadict, jsonrep, config
 from pydicom._version import __version_info__
 from pydicom.charset import default_encoding, convert_encodings
 from pydicom.config import logger
@@ -35,27 +42,20 @@ from pydicom.datadict import dictionary_VR
 from pydicom.datadict import (tag_for_keyword, keyword_for_tag,
                               repeater_has_keyword)
 from pydicom.dataelem import DataElement, DataElement_from_raw, RawDataElement
+from pydicom.fileutil import path_from_pathlike
 from pydicom.pixel_data_handlers.util import (
     convert_color_space, reshape_pixel_array, get_image_pixel_ids
 )
 from pydicom.tag import Tag, BaseTag, tag_in_exception
 from pydicom.uid import (ExplicitVRLittleEndian, ImplicitVRLittleEndian,
                          ExplicitVRBigEndian, PYDICOM_IMPLEMENTATION_UID)
+from pydicom.waveforms import numpy_handler as wave_handler
 
 
-if compat.in_py2:
-    from pkgutil import find_loader as have_package
-else:
-    from importlib.util import find_spec as have_package
-
-have_numpy = True
-try:
-    import numpy
-except ImportError:
-    have_numpy = False
+from importlib.util import find_spec as have_package
 
 
-class PrivateBlock(object):
+class PrivateBlock:
     """Helper class for a private block in the :class:`Dataset`.
 
     .. versionadded:: 1.3
@@ -183,7 +183,9 @@ class PrivateBlock(object):
             The value of the data element. See :meth:`Dataset.add_new()`
             for a description.
         """
-        self.dataset.add_new(self.get_tag(element_offset), VR, value)
+        tag = self.get_tag(element_offset)
+        self.dataset.add_new(tag, VR, value)
+        self.dataset[tag].private_creator = self.private_creator
 
 
 def _dict_equal(a, b, exclude=None):
@@ -328,7 +330,7 @@ class Dataset(dict):
     >>> jsonmodel = ds.to_json()
     >>> ds2 = Dataset()
     >>> ds2.from_json(jsonmodel)
-    (0010, 0010) Patient's Name                      PN: u'Some^Name'
+    (0010, 0010) Patient's Name                      PN: 'Some^Name'
 
     Attributes
     ----------
@@ -351,9 +353,6 @@ class Dataset(dict):
         on ``Dataset.is_little_endian``) if ``False``.
     """
     indent_chars = "   "
-
-    # Python 2: Classes defining __eq__ should flag themselves as unhashable
-    __hash__ = None
 
     def __init__(self, *args, **kwargs):
         """Create a new :class:`Dataset` instance."""
@@ -511,6 +510,10 @@ class Dataset(dict):
 
         self.walk(decode_callback, recursive=False)
 
+    def copy(self):
+        """Return a shallow copy of the dataset."""
+        return copy.copy(self)
+
     def __delattr__(self, name):
         """Intercept requests to delete an attribute by `name`.
 
@@ -585,14 +588,22 @@ class Dataset(dict):
         if isinstance(key, slice):
             for tag in self._slice_dataset(key.start, key.stop, key.step):
                 del self._dict[tag]
+                # invalidate private blocks in case a private creator is
+                # deleted - will be re-created on next access
+                if self._private_blocks and BaseTag(tag).is_private_creator:
+                    self._private_blocks = {}
         else:
             # Assume is a standard tag (for speed in common case)
             try:
                 del self._dict[key]
+                if self._private_blocks and BaseTag(key).is_private_creator:
+                    self._private_blocks = {}
             # If not a standard tag, than convert to Tag and try again
             except KeyError:
                 tag = Tag(key)
                 del self._dict[tag]
+                if self._private_blocks and tag.is_private_creator:
+                    self._private_blocks = {}
 
     def __dir__(self):
         """Give a list of attributes available in the :class:`Dataset`.
@@ -600,8 +611,7 @@ class Dataset(dict):
         List of attributes is used, for example, in auto-completion in editors
         or command-line environments.
         """
-        # Force zip object into a list in case of python3. Also backwards
-        # compatible
+        # Force zip object into a list
         meths = set(list(zip(
             *inspect.getmembers(self.__class__, inspect.isroutine)))[0])
         props = set(list(zip(
@@ -671,7 +681,7 @@ class Dataset(dict):
 
         Parameters
         ----------
-        key : str or int or BaseTag
+        key : str or int or Tuple[int, int] or BaseTag
             The element keyword or tag or the class attribute name to get.
         default : obj or None, optional
             If the element or class attribute is not present, return
@@ -689,7 +699,7 @@ class Dataset(dict):
         value
             If `key` is a class attribute then return its value.
         """
-        if isinstance(key, (str, compat.text_type)):
+        if isinstance(key, str):
             try:
                 return getattr(self, key)
             except AttributeError:
@@ -741,16 +751,6 @@ class Dataset(dict):
         """
         return self._dict.values()
 
-    if compat.in_py2:
-        def iterkeys(self):
-            return self._dict.iterkeys()
-
-        def itervalues(self):
-            return self._dict.itervalues()
-
-        def iteritems(self):
-            return self._dict.iteritems()
-
     def __getattr__(self, name):
         """Intercept requests for :class:`Dataset` attribute names.
 
@@ -790,7 +790,7 @@ class Dataset(dict):
         if not char_set:
             char_set = self._parent_encoding
         else:
-            char_set = convert_encodings(char_set)
+            char_set = convert_encodings(char_set.value)
 
         return char_set
 
@@ -907,9 +907,8 @@ class Dataset(dict):
 
         Returns
         -------
-        int
-            Element base for the given tag (the last 2 hex digits are always 0)
-            as a 32-bit :class:`int`.
+        PrivateBlock
+            The existing or newly created private block.
 
         Raises
         ------
@@ -920,7 +919,7 @@ class Dataset(dict):
             If the private creator tag is not found in the given group and
             the `create` parameter is ``False``.
         """
-        def new_block():
+        def new_block(element):
             block = PrivateBlock(key, self, element)
             self._private_blocks[key] = block
             return block
@@ -936,19 +935,23 @@ class Dataset(dict):
             raise ValueError(
                 'Tag must be private if private creator is given')
 
-        for element in range(0x10, 0x100):
-            private_creator_tag = Tag(group, element)
-            if private_creator_tag not in self._dict:
-                if create:
-                    self.add_new(private_creator_tag, 'LO', private_creator)
-                    return new_block()
-                else:
-                    break
-            if self._dict[private_creator_tag].value == private_creator:
-                return new_block()
+        # find block with matching private creator
+        data_el = next((el for el in self[(group, 0x10):(group, 0x100)]
+                        if el.value == private_creator), None)
+        if data_el is not None:
+            return new_block(data_el.tag.element)
 
-        raise KeyError(
-            "Private creator '{}' not found".format(private_creator))
+        if not create:
+            # not found and shall not be created - raise
+            raise KeyError(
+                "Private creator '{}' not found".format(private_creator))
+
+        # private creator not existing - find first unused private block
+        # and add the private creator
+        first_free_el = next(el for el in range(0x10, 0x100)
+                             if Tag(group, el) not in self._dict)
+        self.add_new(Tag(group, first_free_el), 'LO', private_creator)
+        return new_block(first_free_el)
 
     def private_creators(self, group):
         """Return a list of private creator names in the given group.
@@ -982,13 +985,7 @@ class Dataset(dict):
         if group % 2 == 0:
             raise ValueError('Group must be an odd number')
 
-        private_creators = []
-        for element in range(0x10, 0x100):
-            private_creator_tag = Tag(group, element)
-            if private_creator_tag not in self._dict:
-                break
-            private_creators.append(self._dict[private_creator_tag].value)
-        return private_creators
+        return [x.value for x in self[(group, 0x10):(group, 0x100)]]
 
     def get_private_item(self, group, element_offset, private_creator):
         """Return the data element for the given private tag `group`.
@@ -1258,7 +1255,7 @@ class Dataset(dict):
 
         Returns
         -------
-        type
+        DataElement or type
             The data element for `key` if it exists, or the default value if
             it is a :class:`~pydicom.dataelem.DataElement` or
             ``None``, or a :class:`~pydicom.dataelem.DataElement`
@@ -1268,6 +1265,8 @@ class Dataset(dict):
         ------
         KeyError
             If the `key` is not a valid tag or keyword.
+            If `key` is an unknown non-private tag and
+            `config.enforce_valid_values` is set.
             If no tag exists for `key`, default is not a
             :class:`~pydicom.dataelem.DataElement` and not
             ``None``, and `key` is not a known DICOM tag.
@@ -1277,7 +1276,18 @@ class Dataset(dict):
         if default is not None:
             if not isinstance(default, DataElement):
                 tag = Tag(key)
-                vr = datadict.dictionary_VR(tag)
+                try:
+                    vr = datadict.dictionary_VR(tag)
+                except KeyError:
+                    msg = "Unknown DICOM tag ({:04x}, {:04x})".format(
+                        tag.group, tag.element)
+                    if config.enforce_valid_values:
+                        msg += " can't look up VR"
+                        raise KeyError(msg)
+                    else:
+                        vr = 'UN'
+                        msg += " - setting VR to 'UN'"
+                        warnings.warn(msg)
                 default = DataElement(Tag(key), vr, default)
             self[key] = default
         return default
@@ -1290,9 +1300,10 @@ class Dataset(dict):
         handler_name : str, optional
             The name of the pixel handler that shall be used to
             decode the data. Supported names are: ``'gdcm'``,
-            ``'pillow'``, ``'jpeg_ls'``, ``'rle'`` and ``'numpy'``.
-            If not used (the default), a matching handler is used from the
-            handlers configured in :attr:`~pydicom.config.pixel_data_handlers`.
+            ``'pillow'``, ``'jpeg_ls'``, ``'rle'``, ``'numpy'`` and
+            ``'pylibjpeg'``. If not used (the default), a matching handler is
+            used from the handlers configured in
+            :attr:`~pydicom.config.pixel_data_handlers`.
 
         Returns
         -------
@@ -1623,6 +1634,43 @@ class Dataset(dict):
         self.convert_pixel_data()
         return self._pixel_array
 
+    def waveform_array(self, index: int) -> "np.ndarray":
+        """Return an :class:`~numpy.ndarray` for the multiplex group at
+        `index` in the (5400,0100) *Waveform Sequence*.
+
+        .. versionadded:: 2.1
+
+        Parameters
+        ----------
+        index : int
+            The index of the multiplex group to return the array for.
+
+        Returns
+        ------
+        numpy.ndarray
+            The *Waveform Data* for the multiplex group as an
+            :class:`~numpy.ndarray` with shape (samples, channels). If
+            (003A,0210) *Channel Sensitivity* is present
+            then the values will be in the units specified by the (003A,0211)
+            *Channel Sensitivity Units Sequence*.
+
+        See Also
+        --------
+        :func:`~pydicom.waveforms.numpy_handler.generate_multiplex`
+        :func:`~pydicom.waveforms.numpy_handler.multiplex_array`
+        """
+        transfer_syntax = self.file_meta.TransferSyntaxUID
+        if not wave_handler.supports_transfer_syntax(transfer_syntax):
+            raise NotImplementedError(
+                f"Unable to decode waveform data with a transfer syntax UID "
+                f"of '{transfer_syntax}' ({transfer_syntax.name})"
+            )
+
+        if not wave_handler.is_available():
+            raise RuntimeError("The waveform data handler requires numpy")
+
+        return wave_handler.multiplex_array(self, index, as_raw=False)
+
     # Format strings spec'd according to python string formatting options
     #    See http://docs.python.org/library/stdtypes.html#string-formatting-operations # noqa
     default_element_format = "%(tag)s %(name)-35.35s %(VR)s: %(repval)s"
@@ -1682,6 +1730,11 @@ class Dataset(dict):
         It is also used by ``top()``, therefore the `top_level_only` flag.
         This function recurses, with increasing indentation levels.
 
+        ..versionchanged:: 2.0
+
+            The file meta information is returned in its own section,
+            if :data:`~pydicom.config.show_file_meta` is ``True`` (default)
+
         Parameters
         ----------
         indent : int, optional
@@ -1698,6 +1751,20 @@ class Dataset(dict):
         strings = []
         indent_str = self.indent_chars * indent
         nextindent_str = self.indent_chars * (indent + 1)
+
+        # Display file meta, if configured to do so, and have a non-empty one
+        if (
+            hasattr(self, "file_meta")
+            and self.file_meta is not None
+            and len(self.file_meta) > 0
+            and pydicom.config.show_file_meta
+        ):
+            strings.append("Dataset.file_meta -------------------------------")
+            for data_element in self.file_meta:
+                with tag_in_exception(data_element.tag):
+                    strings.append(indent_str + repr(data_element))
+            strings.append("-------------------------------------------------")
+
         for data_element in self:
             with tag_in_exception(data_element.tag):
                 if data_element.VR == "SQ":  # a sequence
@@ -1727,86 +1794,14 @@ class Dataset(dict):
     def save_as(self, filename, write_like_original=True):
         """Write the :class:`Dataset` to `filename`.
 
-        Saving requires that the ``Dataset.is_implicit_VR`` and
-        ``Dataset.is_little_endian`` attributes exist and are set
-        appropriately. If ``Dataset.file_meta.TransferSyntaxUID`` is present
-        then it should be set to a consistent value to ensure conformance.
-
-        **Conformance with DICOM File Format**
-
-        If `write_like_original` is ``False``, the :class:`Dataset` will be
-        stored in the :dcm:`DICOM File Format <part10/chapter_7.html>`. To do
-        so requires that the ``Dataset.file_meta`` attribute
-        exists and contains a :class:`Dataset` with the required (Type 1) *File
-        Meta Information Group* elements (see
-        :func:`~pydicom.filewriter.dcmwrite` and
-        :func:`~pydicom.filewriter.write_file_meta_info` for more information).
-
-        If `write_like_original` is ``True`` then the :class:`Dataset` will be
-        written as is (after minimal validation checking) and may or may not
-        contain all or parts of the *File Meta Information* (and hence may or
-        may not be conformant with the DICOM File Format).
-
-        Parameters
-        ----------
-        filename : str or file-like
-            Name of file or the file-like to write the new DICOM file to.
-        write_like_original : bool, optional
-            If ``True`` (default), preserves the following information from
-            the :class:`Dataset` (and may result in a non-conformant file):
-
-            - preamble -- if the original file has no preamble then none will
-              be written.
-            - file_meta -- if the original file was missing any required *File
-              Meta Information Group* elements then they will not be added or
-              written.
-              If (0002,0000) *File Meta Information Group Length* is present
-              then it may have its value updated.
-            - seq.is_undefined_length -- if original had delimiters, write them
-              now too, instead of the more sensible length characters
-            - is_undefined_length_sequence_item -- for datasets that belong to
-              a sequence, write the undefined length delimiters if that is
-              what the original had.
-
-            If ``False``, produces a file conformant with the DICOM File
-            Format, with explicit lengths for all elements.
+        Wrapper for pydicom.filewriter.dcmwrite, passing this dataset to it.
+        See documentation for that function for details.
 
         See Also
         --------
-        pydicom.filewriter.write_dataset
-            Write a :class:`Dataset` to a file.
-        pydicom.filewriter.write_file_meta_info
-            Write the *File Meta Information Group* elements to a file.
         pydicom.filewriter.dcmwrite
             Write a DICOM file from a :class:`FileDataset` instance.
         """
-        # Ensure is_little_endian and is_implicit_VR are set
-        if None in (self.is_little_endian, self.is_implicit_VR):
-            has_tsyntax = False
-            try:
-                tsyntax = self.file_meta.TransferSyntaxUID
-                if not tsyntax.is_private:
-                    self.is_little_endian = tsyntax.is_little_endian
-                    self.is_implicit_VR = tsyntax.is_implicit_VR
-                    has_tsyntax = True
-            except AttributeError:
-                pass
-
-            if not has_tsyntax:
-                raise AttributeError(
-                    "'{0}.is_little_endian' and '{0}.is_implicit_VR' must be "
-                    "set appropriately before saving."
-                    .format(self.__class__.__name__)
-                )
-
-        # Try and ensure that `is_undefined_length` is set correctly
-        try:
-            tsyntax = self.file_meta.TransferSyntaxUID
-            if not tsyntax.is_private:
-                self['PixelData'].is_undefined_length = tsyntax.is_compressed
-        except (AttributeError, KeyError):
-            pass
-
         pydicom.dcmwrite(filename, self, write_like_original)
 
     def ensure_file_meta(self):
@@ -1814,7 +1809,9 @@ class Dataset(dict):
 
         .. versionadded:: 1.2
         """
-        self.file_meta = getattr(self, 'file_meta', Dataset())
+        # Changed in v2.0 so does not re-assign self.file_meta with getattr()
+        if not hasattr(self, "file_meta"):
+            self.file_meta = FileMetaDataset()
 
     def fix_meta_info(self, enforce_standard=True):
         """Ensure the file meta info exists and has the correct values
@@ -1889,11 +1886,24 @@ class Dataset(dict):
                              'element and must be added using '
                              'the add() or add_new() methods.'
                              .format(name))
+        elif name == "file_meta":
+            self._set_file_meta(value)
         else:
             # name not in dicom dictionary - setting a non-dicom instance
             # attribute
             # XXX note if user mis-spells a dicom data_element - no error!!!
             object.__setattr__(self, name, value)
+
+    def _set_file_meta(self, value):
+        if value is not None and not isinstance(value, FileMetaDataset):
+            FileMetaDataset.validate(value)
+            warnings.warn(
+                "Starting in pydicom 3.0, Dataset.file_meta must be a "
+                "FileMetaDataset class instance",
+                DeprecationWarning
+            )
+
+        self.__dict__["file_meta"] = value
 
     def __setitem__(self, key, value):
         """Operator for Dataset[key] = value.
@@ -1902,7 +1912,7 @@ class Dataset(dict):
 
         Parameters
         ----------
-        key : int
+        key : int or Tuple[int, int] or str
             The tag for the element to be added to the Dataset.
         value : dataelem.DataElement or dataelem.RawDataElement
             The element to add to the :class:`Dataset`.
@@ -1993,7 +2003,14 @@ class Dataset(dict):
             return all_tags[i_start:i_stop:step]
 
     def __str__(self):
-        """Handle str(dataset)."""
+        """Handle str(dataset).
+
+        ..versionchanged:: 2.0
+
+            The file meta information was added in its own section,
+            if :data:`pydicom.config.show_file_meta` is ``True``
+
+        """
         return self._pretty_str()
 
     def top(self):
@@ -2018,7 +2035,7 @@ class Dataset(dict):
             current object.
         """
         for key, value in list(dictionary.items()):
-            if isinstance(key, (str, compat.text_type)):
+            if isinstance(key, str):
                 setattr(self, key, value)
             else:
                 self[Tag(key)] = value
@@ -2126,11 +2143,11 @@ class Dataset(dict):
             dataset.add(data_element)
         return dataset
 
-    def to_json_dict(self, bulk_data_threshold=1,
+    def to_json_dict(self, bulk_data_threshold=1024,
                      bulk_data_element_handler=None):
         """Return a dictionary representation of the :class:`Dataset`
         conforming to the DICOM JSON Model as described in the DICOM
-        Standard, Part 18, :dcm:`Annex F<part18/chaptr_F.html>`.
+        Standard, Part 18, :dcm:`Annex F<part18/chapter_F.html>`.
 
         .. versionadded:: 1.4
 
@@ -2140,7 +2157,7 @@ class Dataset(dict):
             Threshold for the length of a base64-encoded binary data element
             above which the element should be considered bulk data and the
             value provided as a URI rather than included inline (default:
-            ``1``).
+            ``1024``). Ignored if no bulk data handler is given.
         bulk_data_element_handler : callable, optional
             Callable function that accepts a bulk data element and returns a
             JSON representation of the data element (dictionary including the
@@ -2161,7 +2178,7 @@ class Dataset(dict):
             )
         return json_dataset
 
-    def to_json(self, bulk_data_threshold=1, bulk_data_element_handler=None,
+    def to_json(self, bulk_data_threshold=1024, bulk_data_element_handler=None,
                 dump_handler=None):
         """Return a JSON representation of the :class:`Dataset`.
 
@@ -2175,7 +2192,7 @@ class Dataset(dict):
             Threshold for the length of a base64-encoded binary data element
             above which the element should be considered bulk data and the
             value provided as a URI rather than included inline (default:
-            ``1``).
+            ``1024``). Ignored if no bulk data handler is given.
         bulk_data_element_handler : callable, optional
             Callable function that accepts a bulk data element and returns a
             JSON representation of the data element (dictionary including the
@@ -2223,9 +2240,10 @@ class FileDataset(Dataset):
     preamble : str or bytes or None
         The optional DICOM preamble prepended to the :class:`FileDataset`, if
         available.
-    file_meta : Dataset or None
-        The Dataset's file meta information as a :class:`Dataset`, if available
-        (``None`` if not present). Consists of group ``0x0002`` elements.
+    file_meta : FileMetaDataset or None
+        The Dataset's file meta information as a :class:`FileMetaDataset`,
+        if available (``None`` if not present).
+        Consists of group ``0x0002`` elements.
     filename : str or None
         The filename that the :class:`FileDataset` was read from (if read from
         file) or ``None`` if the filename is not available (if read from a
@@ -2254,7 +2272,7 @@ class FileDataset(Dataset):
 
         Parameters
         ----------
-        filename_or_obj : str or BytesIO or None
+        filename_or_obj : str or PathLike or BytesIO or None
             Full path and filename to the file, memory buffer object, or
             ``None`` if is a :class:`io.BytesIO`.
         dataset : Dataset or dict
@@ -2279,7 +2297,8 @@ class FileDataset(Dataset):
         self.is_implicit_VR = is_implicit_VR
         self.is_little_endian = is_little_endian
         filename = None
-        if isinstance(filename_or_obj, compat.string_types):
+        filename_or_obj = path_from_pathlike(filename_or_obj)
+        if isinstance(filename_or_obj, str):
             filename = filename_or_obj
             self.fileobj_type = open
         elif isinstance(filename_or_obj, io.BufferedReader):
@@ -2393,3 +2412,90 @@ def validate_file_meta(file_meta, enforce_standard=True):
             for tag in missing:
                 msg += '\t{0} {1}\n'.format(tag, keyword_for_tag(tag))
             raise ValueError(msg[:-1])  # Remove final newline
+
+
+class FileMetaDataset(Dataset):
+    """Contains a collection (dictionary) of group 2 DICOM Data Elements.
+
+    .. versionadded:: 2.0
+
+    Derived from :class:`~pydicom.dataset.Dataset`, but only allows
+    Group 2 (File Meta Information) data elements
+    """
+
+    def __init__(self, *args, **kwargs):
+        """Initialize a FileMetaDataset
+
+        Parameters are as per :class:`Dataset`; this overrides the super class
+        only to check that all are group 2 data elements
+
+        Raises
+        ------
+        ValueError
+            If any data elements are not group 2.
+        TypeError
+            If the passed argument is not a :class:`dict` or :class:`Dataset`
+        """
+        super().__init__(*args, **kwargs)
+        FileMetaDataset.validate(self._dict)
+
+    @staticmethod
+    def validate(init_value):
+        """Raise errors if initialization value is not acceptable for file_meta
+
+        Parameters
+        ----------
+        init_value: dict or Dataset
+            The tag:data element pairs to initialize a file meta dataset
+
+        Raises
+        ------
+        TypeError
+            If the passed argument is not a :class:`dict` or :class:`Dataset`
+        ValueError
+            If any data elements passed are not group 2.
+        """
+        if init_value is None:
+            return
+
+        if not isinstance(init_value, (Dataset, dict)):
+            raise TypeError(
+                "Argument must be a dict or Dataset, not {}".format(
+                    type(init_value)
+                )
+            )
+
+        non_group2 = [
+            Tag(tag) for tag in init_value.keys() if Tag(tag).group != 2
+        ]
+        if non_group2:
+            msg = "Attempted to set non-group 2 elements: {}"
+            raise ValueError(msg.format(non_group2))
+
+    def __setitem__(self, key, value):
+        """Override parent class to only allow setting of group 2 elements.
+
+        Parameters
+        ----------
+        key : int or Tuple[int, int] or str
+            The tag for the element to be added to the Dataset.
+        value : dataelem.DataElement or dataelem.RawDataElement
+            The element to add to the :class:`FileMetaDataset`.
+
+        Raises
+        ------
+        ValueError
+            If `key` is not a DICOM Group 2 tag.
+        """
+
+        if isinstance(value.tag, BaseTag):
+            tag = value.tag
+        else:
+            tag = Tag(value.tag)
+
+        if tag.group != 2:
+            raise ValueError(
+                "Only group 2 data elements are allowed in a FileMetaDataset"
+            )
+
+        super().__setitem__(key, value)

@@ -1,15 +1,17 @@
 # Copyright 2008-2018 pydicom authors. See LICENSE file for details.
 """Unit tests for the pydicom.dataset module."""
+import copy
 
 import pytest
 
 import pydicom
-from pydicom import compat
-from pydicom.data import get_testdata_files
-from pydicom.dataelem import DataElement, RawDataElement
-from pydicom.dataset import Dataset, FileDataset, validate_file_meta
-from pydicom.encaps import encapsulate
 from pydicom import dcmread
+from pydicom.data import get_testdata_file
+from pydicom.dataelem import DataElement, RawDataElement
+from pydicom.dataset import (
+    Dataset, FileDataset, validate_file_meta, FileMetaDataset
+)
+from pydicom.encaps import encapsulate
 from pydicom.filebase import DicomBytesIO
 from pydicom.overlay_data_handlers import numpy_handler as NP_HANDLER
 from pydicom.pixel_data_handlers.util import get_image_pixel_ids
@@ -23,13 +25,14 @@ from pydicom.uid import (
 )
 
 
-class BadRepr(object):
+class BadRepr:
     def __repr__(self):
         raise ValueError("bad repr")
 
 
-class TestDataset(object):
+class TestDataset:
     """Tests for dataset.Dataset."""
+
     def setup(self):
         self.ds = Dataset()
         self.ds.TreatmentMachineName = "unit001"
@@ -39,10 +42,10 @@ class TestDataset(object):
         # This comes from bug fix for issue 42
         # First, fake enough to try the pixel_array property
         ds = Dataset()
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.PixelData = 'xyzlmnop'
         msg_from_gdcm = r"'Dataset' object has no attribute 'filename'"
-        msg_from_numpy = (r"'Dataset' object has no attribute "
+        msg_from_numpy = (r"'FileMetaDataset' object has no attribute "
                           "'TransferSyntaxUID'")
         msg_from_pillow = (r"'Dataset' object has no attribute "
                            "'PixelRepresentation'")
@@ -58,6 +61,8 @@ class TestDataset(object):
         sub_ds.BeamNumber = '1'
         dataset.BeamSequence = Sequence([sub_ds])
         fp = DicomBytesIO()
+        dataset.is_little_endian = True
+        dataset.is_implicit_VR = True
         pydicom.write_file(fp, dataset)
 
         def _reset():
@@ -100,6 +105,7 @@ class TestDataset(object):
 
     def test_attribute_error_in_property_correct_debug(self):
         """Test AttributeError in property raises correctly."""
+
         class Foo(Dataset):
             @property
             def bar(self):
@@ -224,6 +230,17 @@ class TestDataset(object):
         assert 'Test' == elem.value
         assert 2 == len(self.ds)
 
+    def test_setdefault_unknown_tag(self, allow_invalid_values):
+        with pytest.warns(UserWarning, match=r"\(8888, 0002\)"):
+            elem = self.ds.setdefault(0x88880002, 'foo')
+        assert 'foo' == elem.value
+        assert 'UN' == elem.VR
+        assert 2 == len(self.ds)
+
+    def test_setdefault_unknown_tag_strict(self, enforce_valid_values):
+        with pytest.raises(KeyError, match=r"\(8888, 0004\)"):
+            elem = self.ds.setdefault(0x88880004, 'foo')
+
     def test_setdefault_tuple(self):
         elem = self.ds.setdefault((0x300a, 0x00b2), 'foo')
         assert 'unit001' == elem.value
@@ -233,12 +250,22 @@ class TestDataset(object):
         assert 'Test' == elem.value
         assert 2 == len(self.ds)
 
-    def test_setdefault_use_value(self):
+    def test_setdefault_unknown_tuple(self, allow_invalid_values):
+        with pytest.warns(UserWarning, match=r"\(8888, 0002\)"):
+            elem = self.ds.setdefault((0x8888, 0x0002), 'foo')
+        assert 'foo' == elem.value
+        assert 'UN' == elem.VR
+        assert 2 == len(self.ds)
+
+    def test_setdefault_unknown_tuple_strict(self, enforce_valid_values):
+        with pytest.raises(KeyError, match=r"\(8888, 0004\)"):
+            elem = self.ds.setdefault((0x8888, 0x0004), 'foo')
+
+    def test_setdefault_use_value(self, allow_invalid_values):
         elem = self.ds.setdefault((0x0010, 0x0010), "Test")
         assert 'Test' == elem.value
         assert 2 == len(self.ds)
-        with pytest.raises(KeyError, match=r'Tag \(0011, 0010\) not found '
-                                           r'in DICOM dictionary'):
+        with pytest.warns(UserWarning, match=r'\(0011, 0010\)'):
             self.ds.setdefault((0x0011, 0x0010), "Test")
 
     def test_setdefault_keyword(self):
@@ -249,6 +276,11 @@ class TestDataset(object):
         )
         assert 'Test' == elem.value
         assert 2 == len(self.ds)
+
+    def test_setdefault_invalid_keyword(self):
+        with pytest.raises(ValueError, match="'FooBar' is not a valid int or"
+                                             " DICOM keyword"):
+            self.ds.setdefault('FooBar', 'foo')
 
     def test_get_exists1(self):
         """Dataset: dataset.get() returns an existing item by name."""
@@ -325,6 +357,7 @@ class TestDataset(object):
 
     def test_dir_subclass(self):
         """Dataset.__dir__ returns class specific dir"""
+
         class DSP(Dataset):
             def test_func(self):
                 pass
@@ -570,6 +603,7 @@ class TestDataset(object):
 
     def test_property(self):
         """Test properties work OK."""
+
         class DSPlus(Dataset):
             @property
             def test(self):
@@ -751,39 +785,6 @@ class TestDataset(object):
         assert 0x00090010 not in ds
         assert 'PatientName' in ds
 
-    @pytest.mark.skipif(not compat.in_py2, reason='Python 2 only iterators')
-    def test_iteritems(self):
-        ds = Dataset()
-        ds.Overlays = 12  # 0000,51B0
-        ds.LengthToEnd = 12  # 0008,0001
-        ds.SOPInstanceUID = '1.2.3.4'  # 0008,0018
-        ds.SkipFrameRangeFlag = 'TEST'  # 0008,9460
-
-        keys = []
-        for key in ds.iterkeys():
-            keys.append(key)
-        assert 4 == len(keys)
-        assert 0x000051B0 in keys
-        assert 0x00089460 in keys
-
-        values = []
-        for value in ds.itervalues():
-            values.append(value)
-
-        assert 4 == len(values)
-        assert DataElement(0x00080018, 'UI', '1.2.3.4') in values
-        assert DataElement(0x00089460, 'CS', 'TEST') in values
-
-        items = {}
-        for key, value in ds.iteritems():
-            items[key] = value
-
-        assert 4 == len(items)
-        assert 0x000051B0 in items
-        assert 0x00080018 in items
-        assert '1.2.3.4' == items[0x00080018].value
-        assert 12 == items[0x00080001].value
-
     def test_group_dataset(self):
         """Test Dataset.group_dataset"""
         ds = Dataset()
@@ -825,7 +826,7 @@ class TestDataset(object):
         assert '1.2.3.4' == ds.get_item(0x00080018).value
 
         # Test deferred read
-        test_file = get_testdata_files('MR_small.dcm')[0]
+        test_file = get_testdata_file('MR_small.dcm')
         ds = dcmread(test_file, force=True, defer_size='0.8 kB')
         ds_ref = dcmread(test_file, force=True)
         # get_item will follow the deferred read branch
@@ -949,9 +950,10 @@ class TestDataset(object):
         ds.add_new(0x00080005, 'CS', 'ISO_IR 100')
         ds.add_new(0x00090010, 'LO', 'Creator 1.0')
         ds.add_new(0x00091001, 'SH', 'Version1')
-        ds.add_new(0x00090011, 'LO', 'Creator 2.0')
-        ds.add_new(0x00091101, 'SH', 'Version2')
-        ds.add_new(0x00091102, 'US', 2)
+        # make sure it works with non-contiguous blocks
+        ds.add_new(0x00090020, 'LO', 'Creator 2.0')
+        ds.add_new(0x00092001, 'SH', 'Version2')
+        ds.add_new(0x00092002, 'US', 2)
 
         # Dataset.private_block
         with pytest.raises(ValueError, match='Tag must be private'):
@@ -986,6 +988,26 @@ class TestDataset(object):
 
         item = ds.get_private_item(0x0009, 0x02, 'Creator 2.0')
         assert 2 == item.value
+
+    def test_private_creator_from_raw_ds(self):
+        # regression test for #1078
+        ct_filename = get_testdata_file("CT_small.dcm")
+        ds = dcmread(ct_filename)
+        ds.private_block(0x11, 'GEMS_PATI_01', create=True)
+        assert ['GEMS_PATI_01'] == ds.private_creators(0x11)
+
+        assert [] == ds.private_creators(0x13)
+        ds.private_block(0x13, 'GEMS_PATI_01', create=True)
+        assert ['GEMS_PATI_01'] == ds.private_creators(0x13)
+
+    def test_add_known_private_tag(self):
+        # regression test for #1082
+        ds = dcmread(get_testdata_file("CT_small.dcm"))
+        assert '[Patient Status]' == ds[0x11, 0x1010].name
+
+        block = ds.private_block(0x11, 'GEMS_PATI_01')
+        block.add_new(0x10, 'SS', 1)
+        assert '[Patient Status]' == ds[0x11, 0x1010].name
 
     def test_add_new_private_tag(self):
         ds = Dataset()
@@ -1030,6 +1052,68 @@ class TestDataset(object):
             ds.private_creators(0x0008)
         assert ['Creator 1.0', 'Creator 2.0'] == ds.private_creators(0x0009)
         assert not ds.private_creators(0x0011)
+
+    def test_non_contiguous_private_creators(self):
+        ds = Dataset()
+        ds.add_new(0x00080005, 'CS', 'ISO_IR 100')
+        ds.add_new(0x00090010, 'LO', 'Creator 1.0')
+        ds.add_new(0x00090020, 'LO', 'Creator 2.0')
+        ds.add_new(0x000900ff, 'LO', 'Creator 3.0')
+
+        assert (['Creator 1.0', 'Creator 2.0', 'Creator 3.0'] ==
+                ds.private_creators(0x0009))
+
+    def test_create_private_tag_after_removing_all(self):
+        # regression test for #1097 - make sure private blocks are updated
+        # after removing all private tags
+        ds = Dataset()
+        block = ds.private_block(0x000b, 'dog^1', create=True)
+        block.add_new(0x01, "SH", "Border Collie")
+        block = ds.private_block(0x000b, 'dog^2', create=True)
+        block.add_new(0x01, "SH", "Poodle")
+
+        ds.remove_private_tags()
+        block = ds.private_block(0x000b, 'dog^2', create=True)
+        block.add_new(0x01, "SH", "Poodle")
+        assert len(ds) == 2
+        assert (0x000b0010) in ds
+        assert ds[0x000b0010].value == 'dog^2'
+
+    def test_create_private_tag_after_removing_private_creator(self):
+        ds = Dataset()
+        block = ds.private_block(0x000b, 'dog^1', create=True)
+        block.add_new(0x01, "SH", "Border Collie")
+
+        del ds[0x000b0010]
+        block = ds.private_block(0x000b, 'dog^1', create=True)
+        block.add_new(0x02, "SH", "Poodle")
+        assert len(ds) == 3
+        assert ds[0x000b0010].value == 'dog^1'
+
+        del ds[Tag(0x000b, 0x0010)]
+        block = ds.private_block(0x000b, 'dog^1', create=True)
+        block.add_new(0x01, "SH", "Pug")
+        assert len(ds) == 3
+        assert ds[0x000b0010].value == 'dog^1'
+
+        del ds['0x000b0010']
+        block = ds.private_block(0x000b, 'dog^1', create=True)
+        block.add_new(0x01, "SH", "Pug")
+        assert len(ds) == 3
+        assert ds[0x000b0010].value == 'dog^1'
+
+    def test_create_private_tag_after_removing_slice(self):
+        ds = Dataset()
+        block = ds.private_block(0x000b, 'dog^1', create=True)
+        block.add_new(0x01, "SH", "Border Collie")
+        block = ds.private_block(0x000b, 'dog^2', create=True)
+        block.add_new(0x01, "SH", "Poodle")
+
+        del ds[0x000b0010:0x000b1110]
+        block = ds.private_block(0x000b, 'dog^2', create=True)
+        block.add_new(0x01, "SH", "Poodle")
+        assert len(ds) == 2
+        assert ds[0x000b0010].value == 'dog^2'
 
     def test_is_original_encoding(self):
         """Test Dataset.write_like_original"""
@@ -1117,7 +1201,7 @@ class TestDataset(object):
             ds.save_as(fp, write_like_original=False)
 
         ds.is_implicit_VR = True
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.file_meta.MediaStorageSOPClassUID = '1.1'
         ds.file_meta.MediaStorageSOPInstanceUID = '1.2'
         ds.file_meta.TransferSyntaxUID = '1.3'
@@ -1130,7 +1214,7 @@ class TestDataset(object):
         ds = Dataset()
         ds.is_little_endian = True
         ds.is_implicit_VR = False
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.file_meta.TransferSyntaxUID = JPEGBaseline
         ds.PixelData = b'\x00\x01\x02\x03\x04\x05\x06'
         ds['PixelData'].VR = 'OB'
@@ -1147,7 +1231,7 @@ class TestDataset(object):
         ds = Dataset()
         ds.is_little_endian = True
         ds.is_implicit_VR = False
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.file_meta.TransferSyntaxUID = JPEGBaseline
         ds.PixelData = encapsulate([b'\x00\x01\x02\x03\x04\x05\x06'])
         ds['PixelData'].VR = 'OB'
@@ -1159,7 +1243,7 @@ class TestDataset(object):
         ds = Dataset()
         ds.is_little_endian = True
         ds.is_implicit_VR = False
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.file_meta.TransferSyntaxUID = JPEGBaseline
         ds.save_as(fp)
 
@@ -1169,7 +1253,7 @@ class TestDataset(object):
         ds = Dataset()
         ds.is_little_endian = True
         ds.is_implicit_VR = False
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.save_as(fp)
 
         del ds.file_meta
@@ -1181,7 +1265,7 @@ class TestDataset(object):
         ds = Dataset()
         ds.is_little_endian = True
         ds.is_implicit_VR = False
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.file_meta.TransferSyntaxUID = '1.2.3.4.5.6'
         ds.save_as(fp)
 
@@ -1193,13 +1277,13 @@ class TestDataset(object):
         # Raise if is_implicit_VR or is_little_endian missing with no tsyntax
         msg = (
             r"'Dataset.is_little_endian' and 'Dataset.is_implicit_VR' must be "
-            r"set appropriately before saving."
+            r"set appropriately before saving"
         )
         with pytest.raises(AttributeError, match=msg):
             ds.save_as(fp)
 
         # Test private transfer syntax raises
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.file_meta.TransferSyntaxUID = '1.2'
         with pytest.raises(AttributeError, match=msg):
             ds.save_as(fp)
@@ -1214,7 +1298,7 @@ class TestDataset(object):
         ds = Dataset()
         ds.is_little_endian = True
         ds.is_implicit_VR = False
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.file_meta.TransferSyntaxUID = JPEGBaseline
         ds.PixelData = encapsulate([b'\x00\x01\x02\x03\x04\x05\x06'])
         elem = ds['PixelData']
@@ -1243,7 +1327,7 @@ class TestDataset(object):
         ds = Dataset()
         ds.is_little_endian = True
         ds.is_implicit_VR = False
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.file_meta.TransferSyntaxUID = '1.2.3.4.5'
         ds.PixelData = encapsulate([b'\x00\x01\x02\x03\x04\x05\x06'])
         elem = ds['PixelData']
@@ -1277,12 +1361,13 @@ class TestDataset(object):
 
     def test_with(self):
         """Test Dataset.__enter__ and __exit__."""
-        test_file = get_testdata_files('CT_small.dcm')[0]
+        test_file = get_testdata_file('CT_small.dcm')
         with dcmread(test_file) as ds:
             assert 'CompressedSamples^CT1' == ds.PatientName
 
     def test_exit_exception(self):
         """Test Dataset.__exit__ when an exception is raised."""
+
         class DSException(Dataset):
             @property
             def test(self):
@@ -1294,7 +1379,7 @@ class TestDataset(object):
     def test_pixel_array_already_have(self):
         """Test Dataset._get_pixel_array when we already have the array"""
         # Test that _pixel_array is returned unchanged unless required
-        fpath = get_testdata_files("CT_small.dcm")[0]
+        fpath = get_testdata_file("CT_small.dcm")
         ds = dcmread(fpath)
         ds._pixel_id = get_image_pixel_ids(ds)
         ds._pixel_array = 'Test Value'
@@ -1304,7 +1389,7 @@ class TestDataset(object):
 
     def test_pixel_array_id_changed(self):
         """Test that we try to get new pixel data if the id has changed."""
-        fpath = get_testdata_files("CT_small.dcm")[0]
+        fpath = get_testdata_file("CT_small.dcm")
         ds = dcmread(fpath)
         ds.file_meta.TransferSyntaxUID = '1.2.3.4'
         ds._pixel_id = 1234
@@ -1320,7 +1405,7 @@ class TestDataset(object):
 
     def test_pixel_array_unknown_syntax(self):
         """Test that pixel_array for an unknown syntax raises exception."""
-        ds = dcmread(get_testdata_files("CT_small.dcm")[0])
+        ds = dcmread(get_testdata_file("CT_small.dcm"))
         ds.file_meta.TransferSyntaxUID = '1.2.3.4'
         msg = (
             r"Unable to decode pixel data with a transfer syntax UID of "
@@ -1359,7 +1444,7 @@ class TestDataset(object):
 
     def test_set_convert_private_elem_from_raw(self):
         """Test Dataset.__setitem__ with a raw private element"""
-        test_file = get_testdata_files('CT_small.dcm')[0]
+        test_file = get_testdata_file('CT_small.dcm')
         ds = dcmread(test_file, force=True)
         # 'tag VR length value value_tell is_implicit_VR is_little_endian'
         elem = RawDataElement((0x0043, 0x1029), 'OB', 2, b'\x00\x01', 0,
@@ -1380,7 +1465,7 @@ class TestDataset(object):
 
     def test_trait_names(self):
         """Test Dataset.trait_names contains element keywords"""
-        test_file = get_testdata_files('CT_small.dcm')[0]
+        test_file = get_testdata_file('CT_small.dcm')
         ds = dcmread(test_file, force=True)
         names = ds.trait_names()
         assert 'PatientName' in names
@@ -1389,8 +1474,9 @@ class TestDataset(object):
 
     def test_walk(self):
         """Test Dataset.walk iterates through sequences"""
+
         def test_callback(dataset, elem):
-            if elem.keyword is 'PatientID':
+            if elem.keyword == 'PatientID':
                 dataset.PatientID = 'FIXED'
 
         ds = Dataset()
@@ -1432,8 +1518,9 @@ class TestDataset(object):
         assert 'TestC' == ds2.PatientName
 
 
-class TestDatasetElements(object):
+class TestDatasetElements:
     """Test valid assignments of data elements"""
+
     def setup(self):
         self.ds = Dataset()
         self.sub_ds1 = Dataset()
@@ -1488,6 +1575,8 @@ class TestDatasetElements(object):
         assert '4.5.6' == self.ds.file_meta.MediaStorageSOPInstanceUID
         self.ds.fix_meta_info(enforce_standard=True)
 
+        with pytest.warns(DeprecationWarning):
+            self.ds.file_meta = Dataset()  # not FileMetaDataset
         self.ds.file_meta.PatientID = 'PatientID'
         with pytest.raises(ValueError,
                            match=r'Only File Meta Information Group '
@@ -1495,11 +1584,12 @@ class TestDatasetElements(object):
             self.ds.fix_meta_info(enforce_standard=True)
 
     def test_validate_and_correct_file_meta(self):
-        file_meta = Dataset()
+        file_meta = FileMetaDataset()
         validate_file_meta(file_meta, enforce_standard=False)
         with pytest.raises(ValueError):
             validate_file_meta(file_meta, enforce_standard=True)
 
+        file_meta = Dataset()  # not FileMetaDataset for bkwds-compat checks
         file_meta.PatientID = 'PatientID'
         for enforce_standard in (True, False):
             with pytest.raises(
@@ -1509,7 +1599,7 @@ class TestDatasetElements(object):
                 validate_file_meta(
                     file_meta, enforce_standard=enforce_standard)
 
-        file_meta = Dataset()
+        file_meta = FileMetaDataset()
         file_meta.MediaStorageSOPClassUID = '1.2.3'
         file_meta.MediaStorageSOPInstanceUID = '1.2.4'
         # still missing TransferSyntaxUID
@@ -1532,9 +1622,9 @@ class TestDatasetElements(object):
         assert 'ACME LTD' == file_meta.ImplementationVersionName
 
 
-class TestFileDataset(object):
+class TestFileDataset:
     def setup(self):
-        self.test_file = get_testdata_files('CT_small.dcm')[0]
+        self.test_file = get_testdata_file('CT_small.dcm')
 
     def test_pickle(self):
         ds = pydicom.dcmread(self.test_file)
@@ -1553,10 +1643,6 @@ class TestFileDataset(object):
         ds1 = pickle.loads(s)['ds']
         assert ds == ds1
         assert ds1.PixelSpacing == [1.0, 1.0]
-
-        # Test workaround for python 2
-        if compat.in_py2:
-            ds1.PixelSpacing = ds1.PixelSpacing
 
         ds1.PixelSpacing.insert(1, 2)
         assert [1, 2, 1] == ds1.PixelSpacing
@@ -1582,7 +1668,8 @@ class TestFileDataset(object):
 
     def test_creation_with_container(self):
         """FileDataset.__init__ works OK with a container such as gzip"""
-        class Dummy(object):
+
+        class Dummy:
             filename = '/some/path/to/test'
 
         ds = Dataset()
@@ -1615,18 +1702,19 @@ class TestFileDataset(object):
         assert expected_diff == set(dir(di)) - set(dir(ds))
 
 
-class TestDatasetOverlayArray(object):
+class TestDatasetOverlayArray:
     """Tests for Dataset.overlay_array()."""
+
     def setup(self):
         """Setup the test datasets and the environment."""
         self.original_handlers = pydicom.config.overlay_data_handlers
         pydicom.config.overlay_data_handlers = [NP_HANDLER]
 
         self.ds = dcmread(
-            get_testdata_files("MR-SIEMENS-DICOM-WithOverlays.dcm")[0]
+            get_testdata_file("MR-SIEMENS-DICOM-WithOverlays.dcm")
         )
 
-        class DummyHandler(object):
+        class DummyHandler:
             def __init__(self):
                 self.raise_exc = False
                 self.has_dependencies = True
@@ -1681,3 +1769,130 @@ class TestDatasetOverlayArray(object):
         pydicom.config.overlay_data_handlers = [self.dummy]
         with pytest.raises(ValueError, match=r"Dummy error message"):
             self.ds.overlay_array(0x6000)
+
+
+class TestFileMeta:
+    def test_deprecation_warning(self):
+        """Assigning ds.file_meta warns if not FileMetaDataset instance"""
+        ds = Dataset()
+        with pytest.warns(DeprecationWarning):
+            ds.file_meta = Dataset()  # not FileMetaDataset
+
+    def test_assign_file_meta(self):
+        """Test can only set group 2 elements in File Meta"""
+        # FileMetaDataset accepts only group 2
+        file_meta = FileMetaDataset()
+        with pytest.raises(ValueError):
+            file_meta.PatientID = "123"
+
+        # No error if assign empty file meta
+        ds = Dataset()
+        ds.file_meta = FileMetaDataset()
+
+        # Can assign non-empty file_meta
+        ds_meta = Dataset()  # not FileMetaDataset
+        ds_meta.TransferSyntaxUID = "1.2"
+        with pytest.warns(DeprecationWarning):
+            ds.file_meta = ds_meta
+
+        # Error on assigning file meta if any non-group 2
+        ds_meta.PatientName = "x"
+        with pytest.raises(ValueError):
+            ds.file_meta = ds_meta
+
+    def test_init_file_meta(self):
+        """Check instantiation of FileMetaDataset"""
+        ds_meta = Dataset()
+        ds_meta.TransferSyntaxUID = "1.2"
+
+        # Accepts with group 2
+        file_meta = FileMetaDataset(ds_meta)
+        assert "1.2" == file_meta.TransferSyntaxUID
+
+        # Accepts dict
+        dict_meta = {0x20010: DataElement(0x20010, "UI", "2.3")}
+        file_meta = FileMetaDataset(dict_meta)
+        assert "2.3" == file_meta.TransferSyntaxUID
+
+        # Fails if not dict or Dataset
+        with pytest.raises(TypeError):
+            FileMetaDataset(["1", "2"])
+
+        # Raises error if init with non-group-2
+        ds_meta.PatientName = "x"
+        with pytest.raises(ValueError):
+            FileMetaDataset(ds_meta)
+
+        # None can be passed, to match Dataset behavior
+        FileMetaDataset(None)
+
+    def test_set_file_meta(self):
+        """Check adding items to existing FileMetaDataset"""
+        file_meta = FileMetaDataset()
+
+        # Raise error if set non-group 2
+        with pytest.raises(ValueError):
+            file_meta.PatientID = "1"
+
+        # Check assigning via non-Tag
+        file_meta[0x20010] = DataElement(0x20010, "UI", "2.3")
+
+        # Check RawDataElement
+        file_meta[0x20010] = RawDataElement(
+            0x20010, "UI", 4, "1.23", 0, True, True
+        )
+
+    def test_del_file_meta(self):
+        """Can delete the file_meta attribute"""
+        ds = Dataset()
+        ds.file_meta = FileMetaDataset()
+        del ds.file_meta
+        assert not hasattr(ds, "file_meta")
+
+    def test_show_file_meta(self):
+        orig_show = pydicom.config.show_file_meta
+        pydicom.config.show_file_meta = True
+
+        ds = Dataset()
+        ds.file_meta = FileMetaDataset()
+        ds.file_meta.TransferSyntaxUID = "1.2"
+        ds.PatientName = "test"
+        shown = str(ds)
+
+        assert shown.startswith("Dataset.file_meta ---")
+        assert shown.splitlines()[1].startswith(
+            "(0002, 0010) Transfer Syntax UID"
+        )
+
+        # Turn off file_meta display
+        pydicom.config.show_file_meta = False
+        shown = str(ds)
+        assert shown.startswith("(0010, 0010) Patient's Name")
+
+        pydicom.config.show_file_meta = orig_show
+
+    @pytest.mark.parametrize('copy_method',
+                             [Dataset.copy, copy.copy, copy.deepcopy])
+    def test_copy(self, copy_method):
+        ds = Dataset()
+        ds.PatientName = "John^Doe"
+        ds.BeamSequence = [Dataset(), Dataset(), Dataset()]
+        ds.BeamSequence[0].Manufacturer = "Linac, co."
+        ds.BeamSequence[1].Manufacturer = "Linac and Sons, co."
+        ds.is_implicit_VR = True
+        ds.is_little_endian = True
+        ds.read_encoding = "utf-8"
+        ds_copy = copy_method(ds)
+        assert isinstance(ds_copy, Dataset)
+        assert len(ds_copy) == 2
+        assert ds_copy.PatientName == "John^Doe"
+        assert ds_copy.BeamSequence[0].Manufacturer == "Linac, co."
+        assert ds_copy.BeamSequence[1].Manufacturer == "Linac and Sons, co."
+        if copy_method == copy.deepcopy:
+            assert id(ds_copy.BeamSequence[0]) != id(ds.BeamSequence[0])
+        else:
+            # shallow copy
+            assert id(ds_copy.BeamSequence[0]) == id(ds.BeamSequence[0])
+        assert ds_copy.is_implicit_VR
+        assert ds_copy.is_little_endian
+        assert ds_copy.read_encoding == "utf-8"

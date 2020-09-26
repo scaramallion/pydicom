@@ -8,15 +8,15 @@ import pytest
 
 from pydicom import dcmread
 from pydicom.config import debug
-from pydicom.data import get_testdata_files
+from pydicom.data import get_testdata_file
 
 
-DS_PATH = get_testdata_files("CT_small.dcm")[0]
+DS_PATH = get_testdata_file("CT_small.dcm")
 PYTEST = [int(x) for x in pytest.__version__.split('.')]
 
 
 @pytest.mark.skipif(PYTEST[:2] < [3, 4], reason='no caplog')
-class TestDebug(object):
+class TestDebug:
     """Tests for config.debug()."""
     def setup(self):
         self.logger = logging.getLogger('pydicom')

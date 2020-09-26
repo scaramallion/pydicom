@@ -2,6 +2,8 @@
 """Read a dicom media file"""
 
 from pydicom.misc import size_in_bytes
+from pydicom.datadict import dictionary_VR
+from pydicom.tag import TupleTag
 from struct import Struct, unpack
 
 extra_length_VRs_b = (b'OB', b'OW', b'OF', b'SQ', b'UN', b'UT')
@@ -11,11 +13,9 @@ DeflatedExplicitVRLittleEndian = b'1.2.840.10008.1.2.1.99'
 ExplicitVRBigEndian = b'1.2.840.10008.1.2.2'
 
 ItemTag = 0xFFFEE000  # start of Sequence Item
-ItemDelimiterTag = 0xFFFEE00D  # end of Sequence Item
-SequenceDelimiterTag = 0xFFFEE0DD  # end of Sequence of undefined length
 
 
-class dicomfile(object):
+class dicomfile:
     """Context-manager based DICOM file object with data element iteration"""
 
     def __init__(self, filename):
@@ -167,7 +167,7 @@ def data_element_generator(fp,
             #   identified as a Sequence
             if VR is None:
                 try:
-                    VR = dictionary_VR(tag)
+                    VR = dictionary_VR((group, elem))
                 except KeyError:
                     # Look ahead to see if it consists of items and
                     # is thus a SQ
@@ -179,16 +179,6 @@ def data_element_generator(fp,
 
             if VR == b'SQ':
                 yield ((group, elem), VR, length, None, value_tell)
-                # seq = read_sequence(fp, is_implicit_VR,
-                #                     is_little_endian, length, encoding)
-                # yield DataElement(tag, VR, seq, value_tell,
-                #                   is_undefined_length=True)
             else:
                 raise NotImplementedError("This reader does not handle "
                                           "undefined length except for SQ")
-                from pydicom.fileio.fileutil import read_undefined_length_value
-
-                delimiter = SequenceDelimiterTag
-                value = read_undefined_length_value(fp, is_little_endian,
-                                                    delimiter, defer_size)
-                yield ((group, elem), VR, length, value, value_tell)

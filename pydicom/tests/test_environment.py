@@ -4,7 +4,7 @@
 The current pydicom testing environments are as follows:
 
 * conda:
-  * Python 2.7:
+  * Python 3.5, 3.6, 3.7:
     * no additional packages
     * numpy
     * numpy, gdcm (newest and v2.8.4)
@@ -12,23 +12,20 @@ The current pydicom testing environments are as follows:
     * numpy, jpeg-ls
     * numpy, pillow (jpg, jpg2k), jpeg-ls
     * numpy, pillow (jpg, jpg2k), jpeg-ls, gdcm
-  * Python 3.4, 3.5, 3.6, 3.7:
     * As with 2.7
-  * Python 2.7, 3.7:
+  * Python 3.7:
     * numpy, pillow (jpg)
 * pypy
-  * Python 2.7, 3.5:
+  * Python 3.5:
     * no additional packages
     * numpy
 * ubuntu
-  * Python 2.7:
-    * no additional packages
-    * numpy
+
 
 Environmental variables
 -----------------------
 DISTRIB: conda, pypy, ubuntu
-PYTHON_VERSION: 2.7, 3.4, 3.5, 3.6, 3.7
+PYTHON_VERSION: 3.5, 3.6, 3.7
 NUMPY: true, false
 PILLOW: jpeg, both, false
 JPEG_LS: false, true
@@ -64,7 +61,7 @@ IN_TRAVIS = get_envar("TRAVIS") == 'true'
 
 
 @pytest.mark.skipif(not IN_TRAVIS, reason="Tests not running in Travis")
-class TestBuilds(object):
+class TestBuilds:
     """Tests for the testing builds in Travis CI."""
     def test_distribution(self):
         """Test that the distribution is correct."""

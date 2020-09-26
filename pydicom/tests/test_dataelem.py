@@ -10,7 +10,7 @@ import pytest
 
 from pydicom import filewriter, config, dcmread
 from pydicom.charset import default_encoding
-from pydicom.data import get_testdata_files
+from pydicom.data import get_testdata_file
 from pydicom.dataelem import (
     DataElement,
     RawDataElement,
@@ -24,7 +24,7 @@ from pydicom.uid import UID
 from pydicom.valuerep import DSfloat
 
 
-class TestDataElement(object):
+class TestDataElement:
     """Tests for dataelem.DataElement."""
     def setup(self):
         self.data_elementSH = DataElement((1, 2), "SH", "hello")
@@ -39,6 +39,13 @@ class TestDataElement(object):
 
     def teardown(self):
         config.use_none_as_empty_text_VR_value = False
+
+    @pytest.fixture
+    def replace_un_with_known_vr(self):
+        old_value = config.replace_un_with_known_vr
+        config.replace_un_with_known_vr = True
+        yield
+        config.replace_un_with_known_vr = old_value
 
     def test_VM_1(self):
         """DataElement: return correct value multiplicity for VM > 1"""
@@ -104,7 +111,7 @@ class TestDataElement(object):
         assert 'Private tag data' == elem.description()
         elem = DataElement(0x00110F00, 'LO', 12345)
         assert elem.tag.is_private
-        assert not hasattr(elem, 'private_creator')
+        assert elem.private_creator is None
         assert 'Private tag data' == elem.description()
 
     def test_description_unknown(self):
@@ -281,28 +288,6 @@ class TestDataElement(object):
         elem[0].PatientID = '1234'
         assert repr(elem) == repr(elem.value)
 
-    @pytest.mark.skipif(sys.version_info >= (3,), reason='Python 2 behavior')
-    def test_unicode(self):
-        """Test unicode representation of the DataElement"""
-        elem = DataElement(0x00100010, 'PN', u'ANON')
-        # Make sure elem.value is actually unicode
-        assert isinstance(elem.value, unicode)
-        assert (
-                   u"(0010, 0010) Patient's Name                      PN: ANON"
-               ) == unicode(elem)
-        assert isinstance(unicode(elem), unicode)
-        assert not isinstance(unicode(elem), str)
-        # Make sure elem.value is still unicode
-        assert isinstance(elem.value, unicode)
-
-        # When value is not in compat.text_type
-        elem = DataElement(0x00100010, 'LO', 12345)
-        assert isinstance(unicode(elem), unicode)
-        assert (
-                   u"(0010, 0010) Patient's Name"
-                   u"                      LO: 12345"
-               ) == unicode(elem)
-
     def test_getitem_raises(self):
         """Test DataElement.__getitem__ raise if value not indexable"""
         elem = DataElement(0x00100010, 'LO', 12345)
@@ -360,31 +345,32 @@ class TestDataElement(object):
         assert '[Overlay ID]' == private_data_elem.name
         assert 'UN' == private_data_elem.VR
 
-    def test_known_tags_with_UN_VR(self):
+    def test_known_tags_with_UN_VR(self, replace_un_with_known_vr):
         """Known tags with VR UN are correctly decoded."""
         ds = Dataset()
         ds[0x00080005] = DataElement(0x00080005, 'UN', b'ISO_IR 126')
         ds[0x00100010] = DataElement(0x00100010, 'UN',
-                                     u'Διονυσιος'.encode('iso_ir_126'))
+                                     'Διονυσιος'.encode('iso_ir_126'))
         ds.decode()
         assert 'CS' == ds[0x00080005].VR
         assert 'PN' == ds[0x00100010].VR
-        assert u'Διονυσιος' == ds[0x00100010].value
+        assert 'Διονυσιος' == ds[0x00100010].value
 
         ds = Dataset()
         ds[0x00080005] = DataElement(0x00080005, 'UN',
                                      b'ISO 2022 IR 100\\ISO 2022 IR 126')
         ds[0x00100010] = DataElement(0x00100010, 'UN',
                                      b'Dionysios=\x1b\x2d\x46'
-                                     + u'Διονυσιος'.encode('iso_ir_126'))
+                                     + 'Διονυσιος'.encode('iso_ir_126'))
         ds.decode()
         assert 'CS' == ds[0x00080005].VR
         assert 'PN' == ds[0x00100010].VR
-        assert u'Dionysios=Διονυσιος' == ds[0x00100010].value
+        assert 'Dionysios=Διονυσιος' == ds[0x00100010].value
 
-    def test_reading_ds_with_known_tags_with_UN_VR(self):
+    def test_reading_ds_with_known_tags_with_UN_VR(
+            self, replace_un_with_known_vr):
         """Known tags with VR UN are correctly read."""
-        test_file = get_testdata_files('explicit_VR-UN.dcm')[0]
+        test_file = get_testdata_file('explicit_VR-UN.dcm')
         ds = dcmread(test_file)
         assert 'CS' == ds[0x00080005].VR
         assert 'TM' == ds[0x00080030].VR
@@ -397,10 +383,10 @@ class TestDataElement(object):
         ds = Dataset()
         ds[0x00080005] = DataElement(0x00080005, 'CS', b'ISO_IR 126')
         ds[0x00111010] = DataElement(0x00111010, 'UN',
-                                     u'Διονυσιος'.encode('iso_ir_126'))
+                                     'Διονυσιος'.encode('iso_ir_126'))
         ds.decode()
         assert 'UN' == ds[0x00111010].VR
-        assert u'Διονυσιος'.encode('iso_ir_126') == ds[0x00111010].value
+        assert 'Διονυσιος'.encode('iso_ir_126') == ds[0x00111010].value
 
     def test_tag_with_long_value_UN_VR(self):
         """Tag with length > 64kb with VR UN is not changed."""
@@ -417,7 +403,8 @@ class TestDataElement(object):
 
     @pytest.mark.parametrize('use_none, empty_value',
                              ((True, None), (False, '')))
-    def test_empty_text_values(self, use_none, empty_value):
+    def test_empty_text_values(self, use_none, empty_value,
+                               no_datetime_conversion):
         """Test that assigning an empty value behaves as expected."""
         def check_empty_text_element(value):
             setattr(ds, tag_name, value)
@@ -533,20 +520,30 @@ class TestDataElement(object):
         assert elem.value == []
 
 
-class TestRawDataElement(object):
+class TestRawDataElement:
+
     """Tests for dataelem.RawDataElement."""
-    def test_key_error(self):
+    def test_invalid_tag_warning(self, allow_invalid_values):
+        """RawDataElement: conversion of unknown tag warns..."""
+        raw = RawDataElement(Tag(0x88880088), None, 4, b'unknown',
+                             0, True, True)
+
+        with pytest.warns(UserWarning, match=r"\(8888, 0088\)"):
+            element = DataElement_from_raw(raw)
+            assert element.VR == 'UN'
+
+    def test_key_error(self, enforce_valid_values):
         """RawDataElement: conversion of unknown tag throws KeyError..."""
         # raw data element -> tag VR length value
         #                       value_tell is_implicit_VR is_little_endian'
         # Unknown (not in DICOM dict), non-private, non-group 0 for this test
-        raw = RawDataElement(Tag(0x88880002), None, 4, 0x1111,
+        raw = RawDataElement(Tag(0x88880002), None, 4, b'unknown',
                              0, True, True)
 
         with pytest.raises(KeyError, match=r"\(8888, 0002\)"):
             DataElement_from_raw(raw)
 
-    def test_valid_tag(self):
+    def test_valid_tag(self, no_datetime_conversion):
         """RawDataElement: conversion of known tag succeeds..."""
         raw = RawDataElement(Tag(0x00080020), 'DA', 8, b'20170101',
                              0, False, True)

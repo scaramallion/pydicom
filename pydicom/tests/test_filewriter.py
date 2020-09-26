@@ -3,51 +3,54 @@
 """test cases for pydicom.filewriter module"""
 import tempfile
 from copy import deepcopy
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from io import BytesIO
 import os
+from pathlib import Path
 from platform import python_implementation
 
 from struct import unpack
 from tempfile import TemporaryFile
+import zlib
 
 import pytest
 
 from pydicom._storage_sopclass_uids import CTImageStorage
 from pydicom import config, __version_info__, uid
-from pydicom.data import get_testdata_files, get_charset_files
-from pydicom.dataset import Dataset, FileDataset
+from pydicom.data import get_testdata_file, get_charset_files
+from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
 from pydicom.dataelem import DataElement, RawDataElement
 from pydicom.filebase import DicomBytesIO
-from pydicom.filereader import dcmread, read_dataset
-from pydicom.filewriter import (write_data_element, write_dataset,
-                                correct_ambiguous_vr, write_file_meta_info,
-                                correct_ambiguous_vr_element, write_numbers,
-                                write_PN, _format_DT, write_text)
+from pydicom.filereader import dcmread, read_dataset, read_file
+from pydicom.filewriter import (
+    write_data_element, write_dataset, correct_ambiguous_vr,
+    write_file_meta_info, correct_ambiguous_vr_element, write_numbers,
+    write_PN, _format_DT, write_text, write_OWvalue
+)
 from pydicom.multival import MultiValue
 from pydicom.sequence import Sequence
 from pydicom.uid import (ImplicitVRLittleEndian, ExplicitVRBigEndian,
                          PYDICOM_IMPLEMENTATION_UID)
 from pydicom.util.hexutil import hex2bytes
-from pydicom.util.fixes import timezone
 from pydicom.valuerep import DA, DT, TM
 from pydicom.values import convert_text
 from ._write_stds import impl_LE_deflen_std_hex
 
-rtplan_name = get_testdata_files("rtplan.dcm")[0]
-rtdose_name = get_testdata_files("rtdose.dcm")[0]
-ct_name = get_testdata_files("CT_small.dcm")[0]
-mr_name = get_testdata_files("MR_small.dcm")[0]
-mr_implicit_name = get_testdata_files("MR_small_implicit.dcm")[0]
-mr_bigendian_name = get_testdata_files("MR_small_bigendian.dcm")[0]
-jpeg_name = get_testdata_files("JPEG2000.dcm")[0]
-no_ts = get_testdata_files("meta_missing_tsyntax.dcm")[0]
-color_pl_name = get_testdata_files("color-pl.dcm")[0]
-sc_rgb_name = get_testdata_files("SC_rgb.dcm")[0]
+rtplan_name = get_testdata_file("rtplan.dcm")
+rtdose_name = get_testdata_file("rtdose.dcm")
+ct_name = get_testdata_file("CT_small.dcm")
+mr_name = get_testdata_file("MR_small.dcm")
+mr_implicit_name = get_testdata_file("MR_small_implicit.dcm")
+mr_bigendian_name = get_testdata_file("MR_small_bigendian.dcm")
+jpeg_name = get_testdata_file("JPEG2000.dcm")
+no_ts = get_testdata_file("meta_missing_tsyntax.dcm")
+color_pl_name = get_testdata_file("color-pl.dcm")
+sc_rgb_name = get_testdata_file("SC_rgb.dcm")
 datetime_name = mr_name
 
 unicode_name = get_charset_files("chrH31.dcm")[0]
 multiPN_name = get_charset_files("chrFrenMulti.dcm")[0]
+deflate_name = get_testdata_file("image_dfl.dcm")
 
 base_version = '.'.join(str(i) for i in __version_info__)
 
@@ -76,7 +79,19 @@ def bytes_identical(a_bytes, b_bytes):
         return False, pos  # False if not identical, position of 1st diff
 
 
-class TestWriteFile(object):
+def as_assertable(dataset):
+    """Copy the elements in a Dataset (including the file_meta, if any)
+       to a set that can be safely compared using pytest's assert.
+       (Datasets can't be so compared because DataElements are not
+       hashable.)"""
+    safe_dict = dict((str(elem.tag) + " " + elem.keyword, elem.value)
+                     for elem in dataset)
+    if hasattr(dataset, "file_meta"):
+        safe_dict.update(as_assertable(dataset.file_meta))
+    return safe_dict
+
+
+class TestWriteFile:
     def setup(self):
         self.file_out = TemporaryFile('w+b')
 
@@ -138,6 +153,14 @@ class TestWriteFile(object):
            them identical (JPEG2K file)."""
         self.compare(jpeg_name)
 
+    def test_pathlib_path_filename(self):
+        """Check that file can be written using pathlib.Path"""
+        ds = dcmread(Path(ct_name))
+        ds.save_as(self.file_out, write_like_original=True)
+        self.file_out.seek(0)
+        ds1 = dcmread(self.file_out)
+        assert ds.PatientName == ds1.PatientName
+
     def testListItemWriteBack(self):
         """Change item in a list and confirm
           it is written to file"""
@@ -185,7 +208,7 @@ class TestWriteFile(object):
         """Test writing element (FFFF, FFFF) to file #92"""
         fp = DicomBytesIO()
         ds = Dataset()
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.is_little_endian = True
         ds.is_implicit_VR = True
         ds.add_new(0xFFFFFFFF, 'LO', '123456')
@@ -203,6 +226,61 @@ class TestWriteFile(object):
         ds = dcmread(self.file_out)
         # group length has been removed
         assert 0x00080000 not in ds
+
+    def test_write_empty_sequence(self):
+        """Make sure that empty sequence is correctly written."""
+        # regression test for #1030
+        ds = read_file(get_testdata_file('test-SR.dcm'))
+        ds.save_as(self.file_out)
+        self.file_out.seek(0)
+        ds = read_file(self.file_out)
+        assert ds.PerformedProcedureCodeSequence == []
+
+    def test_write_deflated_retains_elements(self):
+        """Read a Deflated Explicit VR Little Endian file, write it,
+           and then read the output, to verify that the written file
+           contains the same data.
+           """
+        original = read_file(deflate_name)
+        original.save_as(self.file_out)
+
+        self.file_out.seek(0)
+        rewritten = read_file(self.file_out)
+
+        assert as_assertable(rewritten) == as_assertable(original)
+
+    def test_write_deflated_deflates_post_file_meta(self):
+        """Read a Deflated Explicit VR Little Endian file, write it,
+           and then check the bytes in the output, to verify that the
+           written file is deflated past the file meta information.
+           """
+        original = read_file(deflate_name)
+        original.save_as(self.file_out)
+
+        first_byte_past_file_meta = 0x14e
+        with open(deflate_name, "rb") as original_file:
+            original_file.seek(first_byte_past_file_meta)
+            original_post_meta_file_bytes = original_file.read()
+        unzipped_original = zlib.decompress(original_post_meta_file_bytes,
+                                            -zlib.MAX_WBITS)
+
+        self.file_out.seek(first_byte_past_file_meta)
+        rewritten_post_meta_file_bytes = self.file_out.read()
+        unzipped_rewritten = zlib.decompress(rewritten_post_meta_file_bytes,
+                                             -zlib.MAX_WBITS)
+
+        assert unzipped_rewritten == unzipped_original
+
+    def test_write_dataset_without_encoding(self):
+        """Test that write_dataset() raises if encoding not set."""
+        ds = Dataset()
+        bs = BytesIO()
+        msg = (
+            r"'Dataset.is_little_endian' and 'Dataset.is_implicit_VR' must "
+            r"be set appropriately before saving"
+        )
+        with pytest.raises(AttributeError, match=msg):
+            write_dataset(bs, ds)
 
 
 class TestScratchWriteDateTime(TestWriteFile):
@@ -247,7 +325,7 @@ class TestScratchWriteDateTime(TestWriteFile):
         assert TM_expected == ds.TimeOfLastCalibration
 
 
-class TestWriteDataElement(object):
+class TestWriteDataElement:
     """Attempt to write data elements has the expected behaviour"""
 
     def setup(self):
@@ -361,7 +439,7 @@ class TestWriteDataElement(object):
                     b'20120820120804\\20130901111111 ')  # padded value
         self.check_data_element(data_elem, expected)
         data_elem = DataElement(
-            0x0040A13A, 'DT', u'20120820120804\\20130901111111')
+            0x0040A13A, 'DT', '20120820120804\\20130901111111')
         self.check_data_element(data_elem, expected)
         data_elem = DataElement(
             0x0040A13A, 'DT', b'20120820120804\\20130901111111')
@@ -650,7 +728,7 @@ class TestWriteDataElement(object):
             write_data_element(fp, elem)
 
 
-class TestCorrectAmbiguousVR(object):
+class TestCorrectAmbiguousVR:
     """Test correct_ambiguous_vr."""
 
     def test_pixel_representation_vm_one(self):
@@ -960,7 +1038,7 @@ class TestCorrectAmbiguousVR(object):
         assert 'SS' == ds[0x00283000][0][0x00283002].VR
 
 
-class TestCorrectAmbiguousVRElement(object):
+class TestCorrectAmbiguousVRElement:
     """Test filewriter.correct_ambiguous_vr_element"""
 
     def test_not_ambiguous(self):
@@ -976,7 +1054,7 @@ class TestCorrectAmbiguousVRElement(object):
         elem = RawDataElement(0x60003000, 'OB', 1, b'\x00', 0, True, True)
         out = correct_ambiguous_vr_element(elem, Dataset(), True)
         assert out == elem
-        assert type(out) == RawDataElement
+        assert isinstance(out, RawDataElement)
 
     def test_correct_ambiguous_data_element(self):
         """Test correct ambiguous US/SS element"""
@@ -1008,12 +1086,30 @@ class TestCorrectAmbiguousVRElement(object):
         ds[0x00280120] = elem
         ds.PixelRepresentation = 0
         out = correct_ambiguous_vr_element(elem, ds, True)
-        assert type(out) == DataElement
+        assert isinstance(out, DataElement)
         assert out.VR == 'US'
         assert out.value == 0xfffe
 
+    def test_empty_value(self):
+        """Regression test for #1193: empty value raises exception."""
+        ds = Dataset()
+        elem = RawDataElement(0x00280106, 'US or SS', 0, None, 0, True, True)
+        ds[0x00280106] = elem
+        out = correct_ambiguous_vr_element(elem, ds, True)
+        assert isinstance(out, DataElement)
+        assert out.VR == 'US'
 
-class TestWriteAmbiguousVR(object):
+        ds.LUTDescriptor = [1, 1, 1]
+        elem = RawDataElement(0x00283006, 'US or SS', 0, None, 0, True, True)
+        assert out.value is None
+        ds[0x00283006] = elem
+        out = correct_ambiguous_vr_element(elem, ds, True)
+        assert isinstance(out, DataElement)
+        assert out.VR == 'US'
+        assert out.value is None
+
+
+class TestWriteAmbiguousVR:
     """Attempt to write data elements with ambiguous VR."""
 
     def setup(self):
@@ -1073,7 +1169,7 @@ class TestWriteAmbiguousVR(object):
         assert ['UTF8'] == ds.read_encoding
 
 
-class TestScratchWrite(object):
+class TestScratchWrite:
     """Simple dataset from scratch, written in all endian/VR combinations"""
 
     def setup(self):
@@ -1125,7 +1221,7 @@ class TestScratchWrite(object):
         self.compare_write(impl_LE_deflen_std_hex, file_ds)
 
 
-class TestWriteToStandard(object):
+class TestWriteToStandard:
     """Unit tests for writing datasets to the DICOM standard"""
 
     def test_preamble_default(self):
@@ -1173,6 +1269,16 @@ class TestWriteToStandard(object):
         ds.preamble = b'\x00' * 129
         with pytest.raises(ValueError):
             ds.save_as(DicomBytesIO(), write_like_original=False)
+
+    def test_bad_filename(self):
+        """Test that TypeError is raised for a bad filename."""
+        ds = dcmread(ct_name)
+        with pytest.raises(TypeError, match="dcmwrite: Expected a file path "
+                                            "or a file-like, but got None"):
+            ds.save_as(None)
+        with pytest.raises(TypeError, match="dcmwrite: Expected a file path "
+                                            "or a file-like, but got int"):
+            ds.save_as(42)
 
     def test_prefix(self):
         """Test that the 'DICM' prefix
@@ -1419,7 +1525,7 @@ class TestWriteToStandard(object):
         assert ds_expl[(0x0009, 0x10e7)].VR == 'UN'  # originally UL
         assert ds_expl[(0x0043, 0x1010)].VR == 'UN'  # originally US
 
-    def test_convert_rgb_from_implicit_to_explicit_vr(self):
+    def test_convert_rgb_from_implicit_to_explicit_vr(self, no_numpy_use):
         """Test converting an RGB dataset from implicit to explicit VR
         and vice verse."""
         ds_orig = dcmread(sc_rgb_name)
@@ -1481,7 +1587,7 @@ class TestWriteToStandard(object):
         version = 'PYDICOM ' + base_version
         ds = dcmread(rtplan_name)
         transfer_syntax = ds.file_meta.TransferSyntaxUID
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.save_as(fp, write_like_original=False)
         fp.seek(0)
         out = dcmread(fp)
@@ -1508,7 +1614,7 @@ class TestWriteToStandard(object):
         """Test exception is raised if trying to write with no file_meta."""
         ds = dcmread(rtplan_name)
         del ds.SOPInstanceUID
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         with pytest.raises(ValueError):
             ds.save_as(DicomBytesIO(), write_like_original=False)
         del ds.file_meta
@@ -1562,7 +1668,7 @@ class TestWriteToStandard(object):
         assert 'MessageID' not in ds_out
 
 
-class TestWriteFileMetaInfoToStandard(object):
+class TestWriteFileMetaInfoToStandard:
     """Unit tests for writing File Meta Info to the DICOM standard."""
 
     def test_bad_elements(self):
@@ -1722,7 +1828,7 @@ class TestWriteFileMetaInfoToStandard(object):
         assert test_length == 68 + class_length + version_length
 
 
-class TestWriteNonStandard(object):
+class TestWriteNonStandard:
     """Unit tests for writing datasets not to the DICOM standard."""
 
     def setup(self):
@@ -1785,7 +1891,7 @@ class TestWriteNonStandard(object):
     def test_file_meta_unchanged(self):
         """Test no file_meta elements are added if missing."""
         ds = dcmread(rtplan_name)
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.save_as(self.fp, write_like_original=True)
         assert Dataset() == ds.file_meta
 
@@ -2062,7 +2168,7 @@ class TestWriteNonStandard(object):
                 self.compare_bytes(bytes_in.getvalue(), bytes_out.getvalue())
 
 
-class TestWriteFileMetaInfoNonStandard(object):
+class TestWriteFileMetaInfoNonStandard:
     """Unit tests for writing File Meta Info not to the DICOM standard."""
 
     def setup(self):
@@ -2184,7 +2290,7 @@ class TestWriteFileMetaInfoNonStandard(object):
         assert ref_meta == meta
 
 
-class TestWriteNumbers(object):
+class TestWriteNumbers:
     """Test filewriter.write_numbers"""
 
     def test_write_empty_value(self):
@@ -2234,7 +2340,33 @@ class TestWriteNumbers(object):
         assert fp.getvalue() == b'\x00\x01'
 
 
-class TestWritePN(object):
+class TestWriteOtherVRs:
+    """Tests for writing the 'O' VRs like OB, OW, OF, etc."""
+    def test_write_of(self):
+        """Test writing element with VR OF"""
+        fp = DicomBytesIO()
+        fp.is_little_endian = True
+        elem = DataElement(0x7fe00008, 'OF', b'\x00\x01\x02\x03')
+        write_OWvalue(fp, elem)
+        assert fp.getvalue() == b'\x00\x01\x02\x03'
+
+    def test_write_of_dataset(self):
+        """Test writing a dataset with an element with VR OF."""
+        fp = DicomBytesIO()
+        fp.is_little_endian = True
+        fp.is_implicit_VR = False
+        ds = Dataset()
+        ds.is_little_endian = True
+        ds.is_implicit_VR = False
+        ds.FloatPixelData = b'\x00\x01\x02\x03'
+        ds.save_as(fp)
+        assert fp.getvalue() == (
+            # Tag             | VR            | Length        | Value
+            b'\xe0\x7f\x08\x00\x4F\x46\x00\x00\x04\x00\x00\x00\x00\x01\x02\x03'
+        )
+
+
+class TestWritePN:
     """Test filewriter.write_PN"""
 
     def test_no_encoding(self):
@@ -2249,7 +2381,7 @@ class TestWritePN(object):
         fp = DicomBytesIO()
         fp.is_little_endian = True
         # data element with decoded value
-        elem = DataElement(0x00100010, 'PN', u'Test')
+        elem = DataElement(0x00100010, 'PN', 'Test')
         write_PN(fp, elem)
         assert b'Test' == fp.getvalue()
 
@@ -2266,7 +2398,7 @@ class TestWritePN(object):
         assert encoded == fp.getvalue()
 
         # regression test: make sure no warning is issued, e.g. the
-        # PersonName3 value has not saved the default encoding
+        # PersonName value has not saved the default encoding
         fp = DicomBytesIO()
         fp.is_little_endian = True
         with pytest.warns(None) as warnings:
@@ -2277,7 +2409,7 @@ class TestWritePN(object):
         fp = DicomBytesIO()
         fp.is_little_endian = True
         # data element with decoded value
-        elem = DataElement(0x00100010, 'PN', u'Dionysios=Διονυσιος')
+        elem = DataElement(0x00100010, 'PN', 'Dionysios=Διονυσιος')
         write_PN(fp, elem, encodings=encodings)
         assert encoded == fp.getvalue()
 
@@ -2298,17 +2430,14 @@ class TestWritePN(object):
         fp = DicomBytesIO()
         fp.is_little_endian = True
         # data element with decoded value
-        elem = DataElement(0x00100060, 'PN', [u'Buc^Jérôme', u'Διονυσιος',
-                                              u'Люкceмбypг'])
+        elem = DataElement(0x00100060, 'PN', ['Buc^Jérôme', 'Διονυσιος',
+                                              'Люкceмбypг'])
         write_PN(fp, elem, encodings=encodings)
         assert encoded == fp.getvalue()
 
 
-class TestWriteText(object):
+class TestWriteText:
     """Test filewriter.write_PN"""
-
-    def teardown(self):
-        config.enforce_valid_values = False
 
     def test_no_encoding(self):
         """If text element has no encoding info, default is used"""
@@ -2322,7 +2451,7 @@ class TestWriteText(object):
         fp = DicomBytesIO()
         fp.is_little_endian = True
         # data element with decoded value
-        elem = DataElement(0x00081039, 'LO', u'Test')
+        elem = DataElement(0x00081039, 'LO', 'Test')
         write_text(fp, elem)
         assert b'Test' == fp.getvalue()
 
@@ -2341,18 +2470,18 @@ class TestWriteText(object):
         fp = DicomBytesIO()
         fp.is_little_endian = True
         # data element with decoded value
-        elem = DataElement(0x00081039, 'LO', u'Dionysios is Διονυσιος')
+        elem = DataElement(0x00081039, 'LO', 'Dionysios is Διονυσιος')
         write_text(fp, elem, encodings=encodings)
         # encoding may not be the same, so decode it first
         encoded = fp.getvalue()
-        assert u'Dionysios is Διονυσιος' == convert_text(encoded, encodings)
+        assert 'Dionysios is Διονυσιος' == convert_text(encoded, encodings)
 
     def test_encode_mixed_charsets_text(self):
         """Test encodings used inside the string in arbitrary order"""
         fp = DicomBytesIO()
         fp.is_little_endian = True
         encodings = ['latin_1', 'euc_kr', 'iso-2022-jp', 'iso_ir_127']
-        decoded = u'山田-قباني-吉洞-لنزار'
+        decoded = '山田-قباني-吉洞-لنزار'
 
         # data element with encoded value
         elem = DataElement(0x00081039, 'LO', decoded)
@@ -2378,19 +2507,19 @@ class TestWriteText(object):
         fp = DicomBytesIO()
         fp.is_little_endian = True
         # data element with decoded value
-        decoded = [u'Buc^Jérôme', u'Διονυσιος', u'Люкceмбypг']
+        decoded = ['Buc^Jérôme', 'Διονυσιος', 'Люкceмбypг']
         elem = DataElement(0x00081039, 'LO', decoded)
         write_text(fp, elem, encodings=encodings)
         # encoding may not be the same, so decode it first
         encoded = fp.getvalue()
         assert decoded == convert_text(encoded, encodings)
 
-    def test_invalid_encoding(self):
+    def test_invalid_encoding(self, allow_invalid_values):
         """Test encoding text with invalid encodings"""
         fp = DicomBytesIO()
         fp.is_little_endian = True
         # data element with decoded value
-        elem = DataElement(0x00081039, 'LO', u'Dionysios Διονυσιος')
+        elem = DataElement(0x00081039, 'LO', 'Dionysios Διονυσιος')
         msg = 'Failed to encode value with encodings: iso-2022-jp'
         if 'PyPy' in python_implementation():
             # PyPy seems to have a different implementation of
@@ -2406,21 +2535,20 @@ class TestWriteText(object):
         fp = DicomBytesIO()
         fp.is_little_endian = True
         # data element with decoded value
-        elem = DataElement(0x00081039, 'LO', u'Dionysios Διονυσιος')
+        elem = DataElement(0x00081039, 'LO', 'Dionysios Διονυσιος')
         msg = 'Failed to encode value with encodings: iso-2022-jp, iso_ir_58'
         with pytest.warns(UserWarning, match=msg):
             # encode with two invalid encodings
             write_text(fp, elem, encodings=['iso-2022-jp', 'iso_ir_58'])
             assert expected == fp.getvalue()
 
-    def test_invalid_encoding_enforce_standard(self):
+    def test_invalid_encoding_enforce_standard(self, enforce_valid_values):
         """Test encoding text with invalid encodings with
         `config.enforce_valid_values` enabled"""
-        config.enforce_valid_values = True
         fp = DicomBytesIO()
         fp.is_little_endian = True
         # data element with decoded value
-        elem = DataElement(0x00081039, 'LO', u'Dionysios Διονυσιος')
+        elem = DataElement(0x00081039, 'LO', 'Dionysios Διονυσιος')
         msg = (r"'iso2022_jp' codec can't encode character u?'\\u03c2' in "
                r"position 18: illegal multibyte sequence")
         with pytest.raises(UnicodeEncodeError, match=msg):
@@ -2430,7 +2558,7 @@ class TestWriteText(object):
         fp = DicomBytesIO()
         fp.is_little_endian = True
         # data element with decoded value
-        elem = DataElement(0x00081039, 'LO', u'Dionysios Διονυσιος')
+        elem = DataElement(0x00081039, 'LO', 'Dionysios Διονυσιος')
         with pytest.raises(UnicodeEncodeError, match=msg):
             # encode with two invalid encodings
             write_text(fp, elem, encodings=['iso-2022-jp', 'iso_ir_58'])
@@ -2439,7 +2567,7 @@ class TestWriteText(object):
         """Test that text with delimiters encodes correctly"""
         fp = DicomBytesIO()
         fp.is_little_endian = True
-        decoded = u'Διονυσιος\r\nJérôme/Люкceмбypг\tJérôme'
+        decoded = 'Διονυσιος\r\nJérôme/Люкceмбypг\tJérôme'
         elem = DataElement(0x00081039, 'LO', decoded)
         encodings = ('latin_1', 'iso_ir_144', 'iso_ir_126')
         write_text(fp, elem, encodings=encodings)
@@ -2447,7 +2575,7 @@ class TestWriteText(object):
         assert decoded == convert_text(encoded, encodings)
 
 
-class TestWriteDT(object):
+class TestWriteDT:
     """Test filewriter.write_DT"""
 
     def test_format_dt(self):
@@ -2465,7 +2593,7 @@ class TestWriteDT(object):
         assert _format_DT(elem.value) == '20010203123456'
 
 
-class TestWriteUndefinedLengthPixelData(object):
+class TestWriteUndefinedLengthPixelData:
     """Test write_data_element() for pixel data with undefined length."""
 
     def setup(self):
@@ -2570,10 +2698,10 @@ class TestWriteUndefinedLengthPixelData(object):
         self.fp.is_little_endian = True
         self.fp.is_implicit_VR = False
 
-        msg = (r'The value for the data element \(3004, 0058\) exceeds the '
-               r'size of 64 kByte and cannot be written in an explicit '
-               r'transfer syntax. The data element VR is changed from '
-               r'"DS" to "UN" to allow saving the data.')
+        msg = (r"The value for the data element \(3004, 0058\) exceeds the "
+               r"size of 64 kByte and cannot be written in an explicit "
+               r"transfer syntax. The data element VR is changed from "
+               r"'DS' to 'UN' to allow saving the data.")
 
         with pytest.warns(UserWarning, match=msg):
             write_data_element(self.fp, pixel_data)

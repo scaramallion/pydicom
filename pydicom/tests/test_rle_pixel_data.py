@@ -27,9 +27,10 @@ import sys
 
 import pytest
 
-from pydicom import dcmread, Dataset, config
+from pydicom import dcmread, Dataset
 import pydicom.config
-from pydicom.data import get_testdata_files
+from pydicom.data import get_testdata_file
+from pydicom.dataset import FileMetaDataset
 from pydicom.encaps import defragment_data
 from pydicom.uid import RLELossless, UID
 from pydicom.tests._handler_common import ALL_TRANSFER_SYNTAXES
@@ -65,67 +66,67 @@ except ImportError:
 # EXPL: Explicit VR Little Endian
 # RLE: RLE Lossless
 # 8/8-bit, 1 sample/pixel, 1 frame
-EXPL_8_1_1F = get_testdata_files("OBXXXX1A.dcm")[0]
-RLE_8_1_1F = get_testdata_files("OBXXXX1A_rle.dcm")[0]
+EXPL_8_1_1F = get_testdata_file("OBXXXX1A.dcm")
+RLE_8_1_1F = get_testdata_file("OBXXXX1A_rle.dcm")
 # 8/8-bit, 1 sample/pixel, 2 frame
-EXPL_8_1_2F = get_testdata_files("OBXXXX1A_2frame.dcm")[0]
-RLE_8_1_2F = get_testdata_files("OBXXXX1A_rle_2frame.dcm")[0]
+EXPL_8_1_2F = get_testdata_file("OBXXXX1A_2frame.dcm")
+RLE_8_1_2F = get_testdata_file("OBXXXX1A_rle_2frame.dcm")
 # 8/8-bit, 3 sample/pixel, 1 frame
-EXPL_8_3_1F = get_testdata_files("SC_rgb.dcm")[0]
-RLE_8_3_1F = get_testdata_files("SC_rgb_rle.dcm")[0]
+EXPL_8_3_1F = get_testdata_file("SC_rgb.dcm")
+RLE_8_3_1F = get_testdata_file("SC_rgb_rle.dcm")
 # 8/8-bit, 3 sample/pixel, 2 frame
-EXPL_8_3_2F = get_testdata_files("SC_rgb_2frame.dcm")[0]
-RLE_8_3_2F = get_testdata_files("SC_rgb_rle_2frame.dcm")[0]
+EXPL_8_3_2F = get_testdata_file("SC_rgb_2frame.dcm")
+RLE_8_3_2F = get_testdata_file("SC_rgb_rle_2frame.dcm")
 # 16/16-bit, 1 sample/pixel, 1 frame
-EXPL_16_1_1F = get_testdata_files("MR_small.dcm")[0]
-RLE_16_1_1F = get_testdata_files("MR_small_RLE.dcm")[0]
+EXPL_16_1_1F = get_testdata_file("MR_small.dcm")
+RLE_16_1_1F = get_testdata_file("MR_small_RLE.dcm")
 # 16/12-bit, 1 sample/pixel, 10 frame
-EXPL_16_1_10F = get_testdata_files("emri_small.dcm")[0]
-RLE_16_1_10F = get_testdata_files("emri_small_RLE.dcm")[0]
+EXPL_16_1_10F = get_testdata_file("emri_small.dcm")
+RLE_16_1_10F = get_testdata_file("emri_small_RLE.dcm")
 # 16/16-bit, 3 sample/pixel, 1 frame
-EXPL_16_3_1F = get_testdata_files("SC_rgb_16bit.dcm")[0]
-RLE_16_3_1F = get_testdata_files("SC_rgb_rle_16bit.dcm")[0]
+EXPL_16_3_1F = get_testdata_file("SC_rgb_16bit.dcm")
+RLE_16_3_1F = get_testdata_file("SC_rgb_rle_16bit.dcm")
 # 16/16-bit, 3 sample/pixel, 2 frame
-EXPL_16_3_2F = get_testdata_files("SC_rgb_16bit_2frame.dcm")[0]
-RLE_16_3_2F = get_testdata_files("SC_rgb_rle_16bit_2frame.dcm")[0]
+EXPL_16_3_2F = get_testdata_file("SC_rgb_16bit_2frame.dcm")
+RLE_16_3_2F = get_testdata_file("SC_rgb_rle_16bit_2frame.dcm")
 # 32/32-bit, 1 sample/pixel, 1 frame
-EXPL_32_1_1F = get_testdata_files("rtdose_1frame.dcm")[0]
-RLE_32_1_1F = get_testdata_files("rtdose_rle_1frame.dcm")[0]
+EXPL_32_1_1F = get_testdata_file("rtdose_1frame.dcm")
+RLE_32_1_1F = get_testdata_file("rtdose_rle_1frame.dcm")
 # 32/32-bit, 1 sample/pixel, 15 frame
-EXPL_32_1_15F = get_testdata_files("rtdose.dcm")[0]
-RLE_32_1_15F = get_testdata_files("rtdose_rle.dcm")[0]
+EXPL_32_1_15F = get_testdata_file("rtdose.dcm")
+RLE_32_1_15F = get_testdata_file("rtdose_rle.dcm")
 # 32/32-bit, 3 sample/pixel, 1 frame
-EXPL_32_3_1F = get_testdata_files("SC_rgb_32bit.dcm")[0]
-RLE_32_3_1F = get_testdata_files("SC_rgb_rle_32bit.dcm")[0]
+EXPL_32_3_1F = get_testdata_file("SC_rgb_32bit.dcm")
+RLE_32_3_1F = get_testdata_file("SC_rgb_rle_32bit.dcm")
 # 32/32-bit, 3 sample/pixel, 2 frame
-EXPL_32_3_2F = get_testdata_files("SC_rgb_32bit_2frame.dcm")[0]
-RLE_32_3_2F = get_testdata_files("SC_rgb_rle_32bit_2frame.dcm")[0]
+EXPL_32_3_2F = get_testdata_file("SC_rgb_32bit_2frame.dcm")
+RLE_32_3_2F = get_testdata_file("SC_rgb_rle_32bit_2frame.dcm")
 
 # Transfer syntaxes supported by other handlers
 # Implicit VR Little Endian
-IMPL = get_testdata_files("rtdose_1frame.dcm")[0]
+IMPL = get_testdata_file("rtdose_1frame.dcm")
 # Deflated Explicit VR Little Endian
-DELF = get_testdata_files("image_dfl.dcm")[0]
+DELF = get_testdata_file("image_dfl.dcm")
 # Explicit VR Big Endian
-EXPB = get_testdata_files("SC_rgb_expb_2frame.dcm")[0]
+EXPB = get_testdata_file("SC_rgb_expb_2frame.dcm")
 # JPEG Baseline (Process 1)
-JPEG_BASELINE_1 = get_testdata_files("SC_rgb_jpeg_dcmtk.dcm")[0]
+JPEG_BASELINE_1 = get_testdata_file("SC_rgb_jpeg_dcmtk.dcm")
 # JPEG Baseline (Process 2 and 4)
-JPEG_EXTENDED_2 = get_testdata_files("JPEG-lossy.dcm")[0]
+JPEG_EXTENDED_2 = get_testdata_file("JPEG-lossy.dcm")
 # JPEG Lossless (Process 14)
 JPEG_LOSSLESS_14 = None
 # JPEG Lossless (Process 14, Selection Value 1)
-JPEG_LOSSLESS_14_1 = get_testdata_files("SC_rgb_jpeg_gdcm.dcm")[0]
+JPEG_LOSSLESS_14_1 = get_testdata_file("SC_rgb_jpeg_gdcm.dcm")
 # JPEG-LS Lossless
-JPEG_LS_LOSSLESS = get_testdata_files("MR_small_jpeg_ls_lossless.dcm")[0]
+JPEG_LS_LOSSLESS = get_testdata_file("MR_small_jpeg_ls_lossless.dcm")
 # JPEG-LS Lossy
 JPEG_LS_LOSSY = None
 # JPEG2k Lossless
-JPEG_2K_LOSSLESS = get_testdata_files("emri_small_jpeg_2k_lossless.dcm")[0]
+JPEG_2K_LOSSLESS = get_testdata_file("emri_small_jpeg_2k_lossless.dcm")
 # JPEG2k
-JPEG_2K = get_testdata_files("JPEG2000.dcm")[0]
+JPEG_2K = get_testdata_file("JPEG2000.dcm")
 # RLE Lossless
-RLE = get_testdata_files("MR_small_RLE.dcm")[0]
+RLE = get_testdata_file("MR_small_RLE.dcm")
 
 # Transfer Syntaxes (non-retired + Explicit VR Big Endian)
 SUPPORTED_SYNTAXES = [RLELossless]
@@ -188,7 +189,7 @@ REFERENCE_DATA_UNSUPPORTED = [
 
 # Numpy and the RLE handler are unavailable
 @pytest.mark.skipif(HAVE_NP, reason='Numpy is available')
-class TestNoNumpy_NoRLEHandler(object):
+class TestNoNumpy_NoRLEHandler:
     """Tests for handling datasets without numpy and the handler."""
     def setup(self):
         """Setup the environment."""
@@ -233,7 +234,7 @@ class TestNoNumpy_NoRLEHandler(object):
 
 # Numpy unavailable and the RLE handler is available
 @pytest.mark.skipif(HAVE_NP, reason='Numpy is available')
-class TestNoNumpy_RLEHandler(object):
+class TestNoNumpy_RLEHandler:
     """Tests for handling datasets without numpy and the handler."""
     def setup(self):
         """Setup the environment."""
@@ -291,7 +292,7 @@ class TestNoNumpy_RLEHandler(object):
 
 # Numpy is available, the RLE handler is unavailable
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_NoRLEHandler(object):
+class TestNumpy_NoRLEHandler:
     """Tests for handling datasets with no handler."""
     def setup(self):
         """Setup the environment."""
@@ -336,7 +337,7 @@ class TestNumpy_NoRLEHandler(object):
 
 # Numpy and the RLE handler are available
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_RLEHandler(object):
+class TestNumpy_RLEHandler:
     """Tests for handling datasets with the handler."""
     def setup(self):
         """Setup the environment."""
@@ -716,7 +717,7 @@ class TestNumpy_RLEHandler(object):
 
 # Tests for rle_handler module with Numpy available
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_GetPixelData(object):
+class TestNumpy_GetPixelData:
     """Tests for rle_handler.get_pixeldata with numpy."""
     def test_no_pixel_data_raises(self):
         """Test get_pixeldata raises if dataset has no PixelData."""
@@ -821,7 +822,7 @@ HEADER_DATA = [
 
 
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_RLEParseHeader(object):
+class TestNumpy_RLEParseHeader:
     """Tests for rle_handler._parse_rle_header."""
     def test_invalid_header_length(self):
         """Test exception raised if header is not 64 bytes long."""
@@ -850,7 +851,7 @@ class TestNumpy_RLEParseHeader(object):
 
 
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_RLEDecodeFrame(object):
+class TestNumpy_RLEDecodeFrame:
     """Tests for rle_handler._rle_decode_frame."""
     def test_unsupported_bits_allocated_raises(self):
         """Test exception raised for BitsAllocated not a multiple of 8."""
@@ -1047,7 +1048,7 @@ class TestNumpy_RLEDecodeFrame(object):
 
 
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_RLEDecodeSegment(object):
+class TestNumpy_RLEDecodeSegment:
     """Tests for rle_handler._rle_decode_segment.
 
     Using int8
@@ -1195,7 +1196,7 @@ REFERENCE_ENCODE_ROW = [
 
 
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_RLEEncodeRow(object):
+class TestNumpy_RLEEncodeRow:
     """Tests for rle_handler._rle_encode_row."""
     @pytest.mark.parametrize('input, output', REFERENCE_ENCODE_ROW)
     def test_encode(self, input, output):
@@ -1204,13 +1205,13 @@ class TestNumpy_RLEEncodeRow(object):
 
 
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_RLEEncodeFrame(object):
+class TestNumpy_RLEEncodeFrame:
     """Tests for rle_handler.rle_encode_frame."""
     def setup(self):
         """Setup the tests."""
         # Create a dataset skeleton for use in the cycle tests
         ds = Dataset()
-        ds.file_meta = Dataset()
+        ds.file_meta = FileMetaDataset()
         ds.file_meta.TransferSyntaxUID = '1.2.840.10008.1.2'
         ds.Rows = 2
         ds.Columns = 4
@@ -1416,7 +1417,7 @@ class TestNumpy_RLEEncodeFrame(object):
 
 
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_RLEEncodePlane(object):
+class TestNumpy_RLEEncodePlane:
     """Tests for rle_handler._rle_encode_plane."""
     def test_8bit(self):
         """Test encoding an 8-bit plane into 1 segment."""
@@ -1629,7 +1630,7 @@ class TestNumpy_RLEEncodePlane(object):
 
 
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_RLEEncodeSegment(object):
+class TestNumpy_RLEEncodeSegment:
     """Tests for rle_handler._rle_encode_segment."""
     def test_one_row(self):
         """Test encoding data that contains only a single row."""

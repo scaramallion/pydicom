@@ -28,7 +28,7 @@ There are the following possibilities:
 import pytest
 
 import pydicom
-from pydicom.data import get_testdata_files
+from pydicom.data import get_testdata_file
 from pydicom.filereader import dcmread
 from pydicom.tests._handler_common import ALL_TRANSFER_SYNTAXES
 from pydicom.uid import (
@@ -59,32 +59,32 @@ except ImportError:
 # EXPL: Explicit VR Little Endian
 # Overlay Data
 # 1/1, 1 sample/pixel, 1 frame
-EXPL_1_1_1F = get_testdata_files("MR-SIEMENS-DICOM-WithOverlays.dcm")[0]
+EXPL_1_1_1F = get_testdata_file("MR-SIEMENS-DICOM-WithOverlays.dcm")
 # 1/1, 1 sample/pixel, N frame
 EXPL_1_1_3F = None
 # No Overlay Data
 # 16/16, 1 sample/pixel, 1 frame
-EXPL_16_1_1F = get_testdata_files("MR_small.dcm")[0]
+EXPL_16_1_1F = get_testdata_file("MR_small.dcm")
 
 # Transfer syntaxes supported by other handlers
 # JPEG Baseline (Process 1)
-JPEG_BASELINE_1 = get_testdata_files("SC_rgb_jpeg_dcmtk.dcm")[0]
+JPEG_BASELINE_1 = get_testdata_file("SC_rgb_jpeg_dcmtk.dcm")
 # JPEG Baseline (Process 2 and 4)
-JPEG_EXTENDED_2 = get_testdata_files("JPEG-lossy.dcm")[0]
+JPEG_EXTENDED_2 = get_testdata_file("JPEG-lossy.dcm")
 # JPEG Lossless (Process 14)
 JPEG_LOSSLESS_14 = None
 # JPEG Lossless (Process 14, Selection Value 1)
-JPEG_LOSSLESS_14_1 = get_testdata_files("SC_rgb_jpeg_gdcm.dcm")[0]
+JPEG_LOSSLESS_14_1 = get_testdata_file("SC_rgb_jpeg_gdcm.dcm")
 # JPEG-LS Lossless
-JPEG_LS_LOSSLESS = get_testdata_files("MR_small_jpeg_ls_lossless.dcm")[0]
+JPEG_LS_LOSSLESS = get_testdata_file("MR_small_jpeg_ls_lossless.dcm")
 # JPEG-LS Lossy
 JPEG_LS_LOSSY = None
 # JPEG2k Lossless
-JPEG_2K_LOSSLESS = get_testdata_files("emri_small_jpeg_2k_lossless.dcm")[0]
+JPEG_2K_LOSSLESS = get_testdata_file("emri_small_jpeg_2k_lossless.dcm")
 # JPEG2k
-JPEG_2K = get_testdata_files("JPEG2000.dcm")[0]
+JPEG_2K = get_testdata_file("JPEG2000.dcm")
 # RLE Lossless
-RLE = get_testdata_files("MR_small_RLE.dcm")[0]
+RLE = get_testdata_file("MR_small_RLE.dcm")
 
 # Transfer Syntaxes (non-retired + Explicit VR Big Endian)
 SUPPORTED_SYNTAXES = [
@@ -118,7 +118,7 @@ REFERENCE_DATA_UNSUPPORTED = [
 
 
 # Numpy is/isn't available, numpy handler is unavailable
-class TestNoNumpyHandler(object):
+class TestNoNumpyHandler:
     """Tests for handling datasets without numpy and the handler."""
     def setup(self):
         """Setup the environment."""
@@ -141,7 +141,7 @@ class TestNoNumpyHandler(object):
 
 # Numpy unavailable and the numpy handler is available
 @pytest.mark.skipif(HAVE_NP, reason='Numpy is available')
-class TestNoNumpy_NumpyHandler(object):
+class TestNoNumpy_NumpyHandler:
     """Tests for handling datasets without numpy and the handler."""
     def setup(self):
         """Setup the environment."""
@@ -199,7 +199,7 @@ REFERENCE_DATA_LITTLE = [
 
 
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_NumpyHandler(object):
+class TestNumpy_NumpyHandler:
     """Tests for handling Overlay Data with the handler."""
     def setup(self):
         """Setup the test datasets and the environment."""
@@ -312,7 +312,7 @@ class TestNumpy_NumpyHandler(object):
 
 # Tests for numpy_handler module with Numpy available
 @pytest.mark.skipif(not HAVE_NP, reason='Numpy is not available')
-class TestNumpy_GetOverlayArray(object):
+class TestNumpy_GetOverlayArray:
     """Tests for numpy_handler.get_overlay_array with numpy."""
     def test_no_overlay_data_raises(self):
         """Test get_overlay_array raises if dataset has no OverlayData."""
@@ -432,7 +432,7 @@ if HAVE_NP:
 
 
 @pytest.mark.skipif(not HAVE_NP, reason="Numpy is not available")
-class TestNumpy_ReshapeOverlayArray(object):
+class TestNumpy_ReshapeOverlayArray:
     """Tests for numpy_handler.reshape_overlay_array."""
     def setup(self):
         """Setup the test dataset."""
@@ -537,7 +537,7 @@ REFERENCE_LENGTH = [
 
 
 @pytest.mark.skipif(not HAVE_NP, reason="Numpy is not available")
-class TestNumpy_GetExpectedLength(object):
+class TestNumpy_GetExpectedLength:
     """Tests for numpy_handler.get_expected_length."""
     @pytest.mark.parametrize('shape, bits, length', REFERENCE_LENGTH)
     def test_length_in_bytes(self, shape, bits, length):

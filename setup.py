@@ -23,8 +23,7 @@ description = "Pure python package for DICOM medical file reading and writing"
 needs_pytest = {'pytest', 'test', 'ptr'}.intersection(sys.argv)
 pytest_runner = ['pytest-runner'] if needs_pytest else []
 
-# in_py2 check in next line - pytest>=5 requires Python 3
-TESTS_REQUIRE = ['pytest<5'] if sys.version_info[0] == 2 else ['pytest']
+TESTS_REQUIRE = ['pytest']
 _py_modules = []
 if not have_dicom:
     _py_modules = ['dicom']
@@ -36,8 +35,6 @@ CLASSIFIERS = [
     "Intended Audience :: Science/Research",
     "Development Status :: 5 - Production/Stable",
     "Programming Language :: Python",
-    "Programming Language :: Python :: 2.7",
-    "Programming Language :: Python :: 3.5",
     "Programming Language :: Python :: 3.6",
     "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
@@ -57,7 +54,7 @@ DESCRIPTION = description
 URL = "https://github.com/pydicom/pydicom"
 DOWNLOAD_URL = "https://github.com/pydicom/pydicom/archive/master.zip"
 LICENSE = "MIT"
-VERSION = __version__
+VERSION = __version__  # noqa: F821
 REQUIRES = []
 SETUP_REQUIRES = pytest_runner
 
@@ -81,6 +78,7 @@ def data_files_inventory():
 PACKAGE_DATA = {'pydicom': data_files_inventory()}
 
 opts = dict(name=NAME,
+            python_requires='>=3.6',
             version=VERSION,
             maintainer=MAINTAINER,
             maintainer_email=MAINTAINER_EMAIL,

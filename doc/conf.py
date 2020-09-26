@@ -67,6 +67,7 @@ extensions = [
     'sphinx.ext.napoleon',  # Numpy style docstrings
     'sphinx.ext.linkcode',
     'sphinx.ext.extlinks',
+    'sphinx_copybutton',
     # Custom
     'sphinx_issues',
 ]
@@ -77,6 +78,10 @@ autodoc_default_options = {
     'members': None,
     'no-inherited-members': None,
 }
+
+# copybutton conf
+copybutton_prompt_text = r'>>> |\.\.\. '
+copybutton_prompt_is_regexp = True
 
 # Shortcuts for sphinx.ext.extlinks
 extlinks = {
@@ -131,8 +136,8 @@ source_suffix = '.rst'
 master_doc = 'index'
 
 # General information about the project.
-project = u'pydicom'
-copyright = u'2008-2019, Darcy Mason and pydicom contributors'
+project = 'pydicom'
+copyright = '2008-2020, Darcy Mason and pydicom contributors'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -270,8 +275,8 @@ htmlhelp_basename = 'pydicomdoc'
 # (source start file, target name, title, author,
 # documentclass [howto/manual]).
 latex_documents = [
-  ('index', 'pydicom.tex', u'pydicom Documentation',
-   u'Darcy Mason and pydicom contributors', 'manual'),
+  ('index', 'pydicom.tex', 'pydicom Documentation',
+   'Darcy Mason and pydicom contributors', 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
@@ -303,10 +308,7 @@ def generate_example_rst(app, what, name, obj, options, lines):
 
 
 # Config for sphinx_issues
-
-ref_uri = 'https://github.com/pydicom/pydicom/{ref_type}/{ref_no}'
-ref_github_path = 'pydicom/pydicom'
-ref_user_uri = 'https://github.com/{user}'
+issues_github_path = 'pydicom/pydicom'
 
 
 def setup(app):
@@ -320,7 +322,7 @@ def setup(app):
 
 # The following is used by sphinx.ext.linkcode to provide links to github
 linkcode_resolve = make_linkcode_resolve('pydicom',
-                                         u'https://github.com/pydicom/'
+                                         'https://github.com/pydicom/'
                                          'pydicom/blob/{revision}/'
                                          '{package}/{path}#L{lineno}')
 

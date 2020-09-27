@@ -27,6 +27,8 @@ General style guidelines
   and element number, and italicize the element name, e.g. (7FE0,0010) *Pixel
   Data*. When referring to an element name by itself then use italics: *Bits
   Allocated*
+* Use either the `(0xgggg, 0xeeee)` or `0xggggeeee` forms when writing code
+  examples: `(0x0020, 0x0008) in ds`, `ds[0x00200008].value = None`
 * **ds**, **elem**, **seq**, **arr** - when writing examples try to use ``ds``
   as the variable name for :class:`~pydicom.dataset.Dataset`, ``elem`` for
   :class:`~pydicom.dataelem.DataElement`, ``seq`` for sequences and ``arr``

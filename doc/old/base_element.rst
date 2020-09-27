@@ -64,7 +64,7 @@ You can access specific elements by their DICOM keyword or tag number::
 
   >>> ds.PatientName
   'Last^First^mid^pre'
-  >>> ds[0x10,0x10].value
+  >>> ds[(0x10, 0x10)].value
   'Last^First^mid^pre'
 
 When using the tag number directly a :class:`~dataelem.DataElement`
@@ -83,7 +83,7 @@ number::
 
   >>> ds.PatientID = "12345"
   >>> ds.SeriesNumber = 5
-  >>> ds[0x10,0x10].value = 'Test'
+  >>> ds[(0x10, 0x10)].value = 'Test'
 
 The use of names is possible because *pydicom* intercepts requests for member
 variables, and checks if they are in the DICOM dictionary. It translates the
@@ -131,7 +131,7 @@ can also use the tag numbers directly, such as::
 
   >>> # Same thing with tag numbers - much harder to read:
   >>> # Really should only be used if DICOM keyword not in pydicom dictionary
-  >>> ds[0x300a,0xb0][0][0x300a,0xc2].value
+  >>> ds[(0x300a, 0xb0)][0][(0x300a, 0xc2)].value
   'Field 1'
 
 If you don't remember or know the exact element tag or keyword,
@@ -174,7 +174,7 @@ elements) or tag number::
   >>> elem.VR, elem.value
   ('PN', 'Last^First^mid^pre')
   >>> # an alternative is to use:
-  >>> elem = ds[0x0010,0x0010]
+  >>> elem = ds[(0x0010, 0x0010)]
   >>> elem.VR, elem.value
   ('PN', 'Last^First^mid^pre')
 
@@ -187,7 +187,7 @@ the ``in`` operator with the element's keyword or tag::
 To remove an element from the :class:`~dataset.Dataset`  use the ``del``
 operator::
 
-  >>> del ds.SoftwareVersions  # or del ds[0x0018, 0x1020]
+  >>> del ds.SoftwareVersions  # or del ds[(0x0018, 0x1020)]
 
 To work with (7FE0,0010) *Pixel Data*, the raw :class:`bytes` are available
 through the `PixelData` keyword::
@@ -250,7 +250,7 @@ so in effect, it is just a number with some extra behaviour:
 
       >>> from pydicom.tag import Tag
       >>> t1 = Tag(0x00100010) # all of these are equivalent
-      >>> t2 = Tag(0x10,0x10)
+      >>> t2 = Tag(0x10, 0x10)
       >>> t3 = Tag((0x10, 0x10))
       >>> t4 = Tag("PatientName")
       >>> t1

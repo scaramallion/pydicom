@@ -206,12 +206,12 @@ For all element categories, we can access a particular element in the dataset
 through its tag, which returns a :class:`~pydicom.dataelem.DataElement`
 instance::
 
-    >>> elem = ds[0x0008, 0x0016]
+    >>> elem = ds[(0x0008, 0x0016)]
     >>> elem
     (0008, 0016) SOP Class UID                       UI: CT Image Storage
     >>> elem.keyword
     'SOPClassUID'
-    >>> private_elem = ds[0x0043, 0x104E]
+    >>> private_elem = ds[(0x0043, 0x104E)]
     >>> private_elem
     (0043, 104e) [Duration of X-ray on]              FL: 10.60060977935791
     >>> private_elem.keyword
@@ -231,7 +231,7 @@ exceptions - such as (0010,0010) *Patient's Name* having a keyword of
 
 Because of the lack of a unique keyword, this won't work for private or
 repeating group elements. So for those elements stick to the
-``Dataset[group number, element number]`` method.
+``Dataset[(group number, element number)]`` method.
 
 In most cases, the important thing about an element is its value::
 
@@ -301,7 +301,7 @@ branches start.
 
 Sequence elements can be accessed in the same manner as non-sequence ones::
 
-    >>> seq = ds[0x0010, 0x1002]
+    >>> seq = ds[(0x0010, 0x1002)]
     >>> seq = ds['OtherPatientIDsSequence']
 
 The main difference between sequence and non-sequence elements is that their
@@ -373,7 +373,7 @@ Modifying elements
 We can modify the value of any element by retrieving it and setting the
 value::
 
-    >>> elem = ds[0x0010, 0x0010]
+    >>> elem = ds[(0x0010, 0x0010)]
     >>> elem.value
     'CompressedSamples^CT1'
     >>> elem.value = 'Citizen^Jan'
@@ -457,15 +457,15 @@ There are two ways to get an element's VR:
 ::
 
     >>> from pydicom.datadict import dictionary_VR
-    >>> dictionary_VR([0x0028, 0x1050])
+    >>> dictionary_VR((0x0028, 0x1050))
     'DS'
 
 The Python type to use for a given VR is given by :doc:`this table
 </guides/element_value_types>`. For **DS** we can use a :class:`str`,
 :class:`int` or :class:`float`, so to add the new element::
 
-    >>> ds.add_new([0x0028, 0x1050], 'DS', "100.0")
-    >>> elem = ds[0x0028, 0x1050]
+    >>> ds.add_new((0x0028, 0x1050), 'DS', "100.0")
+    >>> elem = ds[(0x0028, 0x1050)]
     >>> elem
     (0028, 1050) Window Center                       DS: "100.0"
 
@@ -487,7 +487,7 @@ Notice how we can also use the element keyword with the Python
 the dataset? This also works with element tags, so private and repeating group
 elements are also covered::
 
-    >>> [0x0043, 0x104E] in ds:
+    >>> (0x0043, 0x104E) in ds:
     True
 
 Sequences
@@ -515,8 +515,8 @@ Deleting elements
 All elements can be deleted with the :func:`del<operator.__delitem__>`
 operator in combination with the element tag::
 
-    >>> del ds[0x0043, 0x104E]
-    >>> [0x0043, 0x104E] in ds
+    >>> del ds[(0x0043, 0x104E)]
+    >>> (0x0043, 0x104E) in ds
     False
 
 For standard elements you can use the keyword instead::
@@ -594,6 +594,7 @@ so get in the habit of making sure it's there and correct.
 Because we deleted the :attr:`~pydicom.dataset.FileDataset.file_meta` dataset
 we need to add it back::
 
+    >>> from pydicom.dataset import FileMetaDataset
     >>> ds.file_meta = FileMetaDataset()
 
 And now we can add our *Transfer Syntax UID* element and save to file::

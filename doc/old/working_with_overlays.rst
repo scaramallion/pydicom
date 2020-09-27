@@ -20,13 +20,15 @@ include multiple overlays, where the related elements for each overlay use the
 same group number. Because of this, the only way to access a particular
 element from an overlay is to use the ``Dataset[group, elem]`` method:
 
->>> import pydicom
->>> from pydicom.data import get_testdata_files
->>> fpath = get_testdata_files("MR-SIEMENS-DICOM-WithOverlays.dcm")[0]
->>> ds = pydicom.dcmread(fpath)
->>> elem = ds[0x6000, 0x3000]  # returns a DataElement
->>> print(elem)
-(6000, 3000) Overlay Data                        OW: Array of 29282 elements
+.. code-block:: python
+
+    >>> import pydicom
+    >>> from pydicom.data import get_testdata_files
+    >>> fpath = get_testdata_files("MR-SIEMENS-DICOM-WithOverlays.dcm")[0]
+    >>> ds = pydicom.dcmread(fpath)
+    >>> elem = ds[(0x6000, 0x3000)]  # returns a DataElement
+    >>> print(elem)
+    (6000, 3000) Overlay Data                        OW: Array of 29282 elements
 
 
 pydicom tends to be "lazy" in interpreting DICOM data. For example, by default
@@ -85,7 +87,7 @@ they must be bit-packed and written back to the correct element:
       packed_bytes += b'\x00'
 
   # Update the element value
-  ds[0x6000, 0x3000].value = packed_bytes
+  ds[(0x6000, 0x3000)].value = packed_bytes
   ds.save_as("temp.dcm")
 
 Some changes may require other DICOM elements to be modified. For example, if

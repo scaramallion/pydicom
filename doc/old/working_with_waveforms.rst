@@ -24,19 +24,21 @@ common sampling frequency (in Hz), which is given by the (003A,001A) *Sampling
 Frequency*. The waveform data for each multiplex is encoded in the
 corresponding (5400,1010) *Waveform Data* element.
 
->>> from pydicom import dcmread
->>> from pydicom.data import get_testdata_file
->>> fpath = get_testdata_file("waveform_ecg.dcm")
->>> ds = dcmread(fpath)
->>> ds.WaveformSequence
-<Sequence, length 2>
->>> multiplex = ds.WaveformSequence[0]
->>> multiplex.NumberOfWaveformChannels
-12
->>> multiplex.SamplingFrequency
-"1000.0"
->>> multiplex['WaveformData']
-(5400, 1010) Waveform Data                       OW: Array of 240000 elements
+.. code-block:: python
+
+    >>> from pydicom import dcmread
+    >>> from pydicom.data import get_testdata_file
+    >>> fpath = get_testdata_file("waveform_ecg.dcm")
+    >>> ds = dcmread(fpath)
+    >>> ds.WaveformSequence
+    <Sequence, length 2>
+    >>> multiplex = ds.WaveformSequence[0]
+    >>> multiplex.NumberOfWaveformChannels
+    12
+    >>> multiplex.SamplingFrequency
+    "1000.0"
+    >>> multiplex['WaveformData']
+    (5400, 1010) Waveform Data                       OW: Array of 240000 elements
 
 
 ``Dataset.waveform_generator``

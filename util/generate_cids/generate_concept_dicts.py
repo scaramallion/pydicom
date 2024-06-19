@@ -1,52 +1,87 @@
 #!/usr/bin/env python
 # Encoding required to deal with 'micro' character
 """Script for auto-generating DICOM SR context groups from FHIR JSON value set
-resources.
+resources."""
 
-
-"""
-
+import argparse
 from io import BytesIO
 import json
 import ftplib
 import glob
+from keyword import iskeyword
 import logging
 import os
+from pathlib import Path
 import re
 import sys
 import tempfile
 from pprint import pprint
+import urllib.request as urllib_request
 from xml.etree import ElementTree as ET
+import zipfile
 
-if sys.version_info[0] < 3:
-    import urllib as urllib_request
-else:
-    import urllib.request as urllib_request
 
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
+
+FTP_HOST = "medical.nema.org"
+FTP_PATH = "medical/dicom/resources/valuesets/"
+FTP_FHIR_REGEX = re.compile(r".+/DICOM_ValueSets(?P<version>[0-9]{4}[a-z])_release_fhir_json_[0-9]+.zip")
+ISOTOPE_REGEX = re.compile(r"\^(?P<isotope>[0-9]{1,3}[m]?)\^(?P<element>[a-zA-z]+)( (?P<suffix>.+))?")
 
 # Example excerpt fhir JSON for reference
+CID_ID_REGEX = re.compile("^dicom-cid-([0-9]+)-[a-zA-Z]+")
 """
+{
     "resourceType":"ValueSet",
-    "id":"dicom-cid-10-InterventionalDrug",
-    ...
-    "name":"InterventionalDrug",
-    ...
+    "id":"dicom-cid-2-AnatomicModifier",
+    "url":"http://dicom.nema.org/medical/dicom/current/output/chtml/part16/sect_CID_2.html",
+    "identifier":[
+        {
+            "system":"urn:ietf:rfc:3986",
+            "value":"urn:oid:1.2.840.10008.6.1.1"
+        }
+    ],
+    "version":"20190118",
+    "name":"AnatomicModifier",
+    "status":"active",
+    "experimental":false,
+    "date":"2023-09-07",
+    "publisher":"NEMA MITA DICOM",
+    "description":"Transitive closure of CID 2 AnatomicModifier",
+    "copyright":"© 2023 NEMA",
     "compose":{
         "include":[
+            {
+                "system":"http://dicom.nema.org/resources/ontology/DCM",
+                "concept":[
+                    {
+                        "code":"130290",
+                        "display":"Median"
+                    }
+                ]
+            },
             {
                 "system":"http://snomed.info/sct",
                 "concept":[
                     {
-                        "code":"387362001",
-                        "display":"Epinephrine"
+                        "code":"14414005",
+                        "display":"Peripheral"
                     },
+                    ...,
+                ],
+            },
+            ...,
+        ],
+    },
+    ...,
+}
 
 """
 # The list of scheme designators is not complete.
 # For full list see table 8-1 in part 3.16 chapter 8:
 # http://dicom.nema.org/medical/dicom/current/output/chtml/part16/chapter_8.html#table_8-1
-FHIR_SYSTEM_TO_DICOM_SCHEME_DESIGNATOR = {
+# Maps CID["compose"]["include"][...]["system"] entry to a 'Coding Scheme Designator'
+FHIR_SYSTEM_TO_DICOM_SCHEME_DESIGNATOR: dict[str, str] = {
     "http://snomed.info/sct": "SCT",
     "http://dicom.nema.org/resources/ontology/DCM": "DCM",
     "http://loinc.org": "LN",
@@ -64,6 +99,7 @@ FHIR_SYSTEM_TO_DICOM_SCHEME_DESIGNATOR = {
     "http://www.itis.gov": "ITIS_TSN",
     "http://arxiv.org/abs/1612.07003": "IBSI",
     "http://www.nlm.nih.gov/research/umls/rxnorm": "RXNORM",
+    "http://hl7.org/fhir/sid/icd-10": "I10",
 }
 
 DOC_LINES = [
@@ -71,9 +107,345 @@ DOC_LINES = [
     "# -*- coding: utf-8 -*-\n",
     "\n",
 ]
+MANUAL_CONVERSION = {
+    "tau_m": "TauM",
+    "None": "None_",
+}
+TRANSLATIONS = {
+    "DCM": {
+        "121417": "Two Sigma deviation of population",  # 2 Sigma deviation of population
+        "113860": "Fifteen centimeters from Isocenter toward Source",  # 15cm from Isocenter toward Source
+        "130680": "ThreeD Speckle Tracking",  # 3D Speckle Tracking
+        "130726": "Three_ Moderate stenosis",  # 3 - Moderate stenosis
+        "130723": "Zero_ Documented absence of CAD",  # 0 - Documented absence of CAD
+        "109014": "ThirtyFivePercent of thermal/dye dilution CO",  # 35% of thermal/dye dilution CO
+        "130730": "Five_ Total coronary occlusion",  # 5 - Total coronary occlusion
+        "111393": "Second week",  # 2nd week
+        "113861": "Thiry centimeters in Front of Image Input Surface",  # 30cm in Front of Image Input Surface
+        "128701": "ThreeD Gel",  # 3D Gel
+        "111396": "Less Than 3 months ago",  # < 3 months ago
+        "130610": "ThreeD Shear Wave Elastography",  # 3D Shear Wave Elastography
+        "M3D": "Model for 3D Manufacturing",
+        "111394": "Third week",  # 3rd week
+        "128186": "",  # ['Dose Calculation Image Series', 'RT Prescription Result']
+        "112716": "TenX",  # 10X
+        "130541": "Ten centimeter Dosimetry Phantom",  # 10 cm Dosimetry Phantom
+        "130609": "TwoD Shear Wave Elastography",  # 2D Shear Wave Elastography
+        "112718": "FortyX",  # 40X
+        "112715": "FiveX",  # 5X
+        "130725": "Two_ Mild non-obstructive CAD",  # 2 - Mild non-obstructive CAD
+        "125223": "Four Point Segment Finding Scale",  # 4 Point Segment Finding Scale
+        "128487": "ThreeD Dose Map",  # 3D Dose Map
+        "111398": "More Than 1 year ago",  # > 1 year ago
+        "LS": "",  # ['Laser Scan', 'Laser Surface Scan']
+        "113965": "100 centimeters from X Ray Source",  # 100cm from X-Ray Source
+        "122073": "",  # ['Analysis or measurements for current procedure', 'Current procedure evidence']
+        "111397": "Four Months to 1 Year Ago",  # 4 months to 1 year ago
+        "113865": "Four Point Two centimeters above Breast Support Surface",  # 4.2cm above Breast Support Surface
+        "109015": "Seventy Percent of thermal/dye dilution CO",  # 70% of thermal/dye dilution CO
+        "126752": "Zirconium-89 28H1",  # 28H1 ^89^Zr
+        "126751": "Zirconium-89 7D12",  # 7D12 ^89^Zr
+        "111209": "",  # ['Positioning', 'Patient Positioning Problem']
+        "130141": "Helium-3 nucleus",  # ^3^Helium nucleus
+        "126713": "Fluorine-18 2FA",  # 2FA F^18^
+        "126750": "Zirconium-89 7E11",  # 7E11 ^89^Zr
+        "111392": "First week",  # 1st week
+        "130724": "One_ Minimal non-obstructive CAD",  # 1 - Minimal non-obstructive CAD
+        "125225": "Five Point Segment Finding Scale With Graded Hypokinesis",  # 5 Point Segment Finding Scale With Graded Hypokinesis
+        "130729": "FourB_ Severe stenosis",  # 4B - Severe stenosis
+        "130727": "Four_ Severe stenosis",  # 4 - Severe stenosis
+        "130142": "Helium-4 nucleus",  # ^4^Helium nucleus
+        "113863": "30 centimeters above Tabletop",  # 30cm above Tabletop
+        "125224": "Five Point Segment Finding Scale",  # 5 Point Segment Finding Scale
+        "112717": "TwentyX",  # 20X
+        "130679": "TwoD 2D Speckle Tracking",  # 2D Speckle Tracking
+        "113864": "Fifteen centimeters from Table Centerline",  # 15cm from Table Centerline
+        "130728": "FourA_ Severe stenosis",  # 4A - Severe stenosis
+        "122230": "Ten Year CHD Risk",  # 10 Year CHD Risk
+        "113862": "One centimeter above Tabletop",  # 1cm above Tabletop
+    },
+    "SCT": {
+        "955009": "Bronchial",  # 'Bronchus', 'Bronchial'
+        "1101003": "Cranial Cavity",  # 'Intracranial', 'Cranial Cavity'
+        "1182007": "Hypotensive agent",  # 'Hypotensive agent', 'Antihypertensive'
+        "2095001": "Nasal sinus",  # 'Paranasal sinus', 'Nasal sinus', 'paranasal sinus'
+        "2812003": "Femoral head",  # 'Head of Femur', 'Femoral head'
+        "3120008": "Pleura",  # 'Pleura', 'Pleural structure'
+        "4557003": "Unstable Angina",  # 'Unstable Angina', 'Unstable Angina, Progressive Angina'
+        "5713008": "Submandibular area",  # 'Submandibular area', 'Submandibular triangle'
+        "6725000": "Methylene blue",  # 'methylene blue stain', 'Methylene blue'
+        "7305005": "Coarctation of aorta",  # 'Coarctation of the Aorta', 'Coarctation of Aorta'
+        "8128003": "Aortic Root",  # 'Root of Aorta', 'Aortic Root'
+        "8629005": "Right Superior Pulmonary Vein",  # 'Right Superior Pulmonary Vein', 'Superior Right Pulmonary Vein'
+        "8887007": "Brachiocephalic vein",  # ['Innominate vein', 'Brachiocephalic vein']
+        "9875009": "Thymus",  # 'Thymus', 'Thymus Gland'
+        "12691009": "Brachiocephalic trunk",  # 'Brachiocephalic trunk', 'Innominate artery'
+        "13213009": "Congenital heart disease",  # 'heart disease, congenital', 'heart disease - congenital', 'Congenital heart disease'
+        "13648007": "Urethra",  # 'Urethra', 'Endo-urethral'
+        "14944004": "Primitive aorta",  # 'Neo-aorta (primitive aorta)', 'Primitive aorta'
+        "16982005": "Shoulder",  # 'Shoulder region structure', 'Shoulder'
+        "18590009": "Cardiac pacing",  # 'Cardiac pacing', 'Pacing'
+        "19227008": "Foreign body",  # 'Foreign material (iodized oil, mercury,talc)', 'Foreign body'
+        "20298003": "Xiphoid process of sternum",  # 'Xiphoid Process', 'Xiphoid process of sternum'
+        "22036004": "Pseudoaneurysm",  # 'Pseudo Aneurysm', 'Pseudoaneurysm'
+        "26386000": "Vitreous Cavity",  # 'Vitreous', 'Vitreous Cavity'
+        "29092000": "Vein",  # 'Vein', 'Endo-venous'
+        "30518006": "Scaphoid",  # 'Scaphoid', 'Navicular of forefoot'
+        "31636006": "Anterior chamber of eye",  # 'Anterior Chamber', 'Anterior chamber of eye'
+        "32849002": "Esophagus",  # 'Endo-esophageal', 'Esophagus'
+        "33252009": "beta-Adrenergic blocking agent",  # 'beta-Adrenergic blocking agent', 'Beta blocker'
+        "34340008": "Venous network",  # 'Central venous system', 'Venous network'
+        "34402009": "Rectum",  # 'Endo-rectal', 'Rectum'
+        "35304003": "Cardiac tamponade",  # 'Pericardial tamponade', 'Cardiac tamponade'
+        "36455000": "Metacarpal",  # 'Metacarpal', 'Metacarpus'
+        "38341003": "Hypertension",  # 'Systemic arterial hypertension', 'Hypertension', 'Hypertensive'
+        "39057004": "Pulmonary valve",  # 'Pulmonary valve', 'Pulmonic Valve'
+        "40146001": "Cerebral cortex",  # 'Cerebral Gray Matter', 'Cerebral cortex'
+        "40199007": "Supine body position",  # 'supine', 'Supine body position', 'Supine'
+        "40388003": "Implant",  # 'Implant, device', 'Implant'
+        "42575006": "Pituitary Fossa",  # 'Pituitary Fossa', 'Sella turcica'
+        "42700002": "Round shape",  # 'Round shape', 'Round'
+        "43119007": "Posterior Communicating Artery",  # 'Posterior Communicating Artery', 'Posterior communication artery', 'posterior communicating artery'
+        "43799004": "Thoracic cavity",  # 'Chest cavity', 'Intra-thoracic'
+        "43863001": "Left Superior Pulmonary Vein",  # 'Left Superior Pulmonary Vein', 'Superior left pulmonary vein', 'Superior Left Pulmonary Vein'
+        "45007003": "Hypotension",  # 'Hypotension', 'Hypotensive'
+        "45211000": "Catheterization",  # 'Catheterization', 'Insertion of catheter'
+        "45227007": "Hypertrophic obstructive cardiomyopathy",  # 'Hypertrophic cardiomyopathy with obstruction', 'Hypertrophic obstructive cardiomyopathy'
+        "45341000": "Pulmonary trunk",  # 'Pulmonary trunk', 'Pulmonary Trunk', 'Trunk of pulmonary artery'
+        "50960005": "Hemorrhage",  # 'Hemorrhage', 'Bleeding'
+        "51114001": "Artery",  # 'Artery', 'Endo-arterial'
+        "51249003": "Left Inferior Pulmonary Vein",  # 'Left Inferior Pulmonary Vein', 'Inferior left pulmonary vein', 'Inferior Left Pulmonary Vein'
+        "53315004": "Germanium-68",  # '^68^Germanium', 'Germanium Ge^68^'
+        "53342003": "Internal nose",  # 'Endo-nasal', 'Internal nose'
+        "55584005": "Embolus",  # 'embolism', 'Embolus'
+        "57850000": "Celiac artery",  # 'Truncus coeliacus', 'Celiac Axis'
+        "58095006": "Interatrial septum",  # 'Interatrial septum', 'Interatrial Septum Structure'
+        "59438005": "Left Anterior Descending Coronary Artery",  # 'Left Anterior Descending Coronary Artery', 'Anterior Descending Branch of Left Coronary Artery'
+        "59820001": "Blood Vessel",  # 'Endo-vascular', 'Blood vessel'
+        "59972007": "Atrial Systole",  # 'Atrial Systole', 'Atrial Systole (A-wave)'
+        "60441008": "trypan blue stain",  # 'Trypan blue', 'trypan blue stain'
+        "61716009": "Krypton-81m",  # 'Krypton^81m', '^81m^Krypton'
+        "62189002": "ulcerated atheromatous plaque",  # 'Plaque Ulceration', 'ulcerated atheromatous plaque'
+        "64033007": "Kidney",  # 'Endo-renal', 'Kidney'
+        "65197004": "Mitral ring",  # 'Mitral Annulus', 'Mitral ring'
+        "65818007": "Stent",  # 'stent', 'Stent', 'Stent, device'
+        "66787007": "Cephalic",  # 'Cranial', 'Cephalic
+        "68183006": "Bone Screw",  # 'Screw', 'Bone Screw'
+        "69327007": "Internal thoracic artery",  # 'Internal thoracic artery', 'Internal mammary artery'
+        "71616004": "Muscle",  # 'Muscular', 'Muscle'
+        "71633006": "Sodium-22",  # 'Sodium Na^22^', '^22^Sodium'
+        "72506001": "Implantable defibrillator",  # 'Defibrillator', 'Implantable defibrillator'
+        "75540009": "High",  # 'Elevated', 'High'
+        "76197007": "hyperplasia",  # 'hyperplasia', 'Hyperplasia, usual'
+        "76784001": "Vagina",  # 'Endo-vaginal', 'Vagina'
+        "77444004": "Bone Pin",  # 'Bone Pin', 'Pin'
+        "78076003": "Lens",  # 'Eye lenses', 'Lens'
+        "80891009": "Heart",  # 'Heart', 'Endo-cardiac'
+        "82849001": "Retroperitoneum",  # 'Retroperitoneal space', 'Retroperitoneum'
+        "84301002": "External auditory canal",  # 'External auditory canal', 'External Auditory Meatus'
+        "84360004": "Ovoid shape",  # 'Ovoid shape', 'Ovoid shape (Oval)'
+        "87463005": "Cerebral fornix",  # 'fornix', 'Cerebral fornix'
+        "87953007": "Ureter",  # 'Ureter', 'Endo-ureteric'
+        "90892000": "Diastole",  # 'Diastole', 'Diastolic'
+        "91707000": "Primitive pulmonary artery",  # 'Neonatal pulmonary artery (primitive PA)', 'Primitive pulmonary artery'
+        "91747007": "Lumen of blood vessel",  # 'Lumen', 'Lumen of blood vessel'
+        "91772007": "Organ Parenchyma",  # 'Parenchyma', 'Organ'
+        "108369006": "Neoplasm",  # 'tumor', 'Neoplasm', 'Tumor'
+        "111973004": "Systole",  # 'Systolic', 'Systole'
+        "113259005": "Tricuspid ring",  # 'Tricuspid Annulus', 'Tricuspid ring'
+        "113273001": "Right Inferior Pulmonary Vein",  # 'Inferior Right Pulmonary Vein', 'Inferior right pulmonary vein', 'Right Inferior Pulmonary Vein'
+        "128448001": "Pulmonary capillary wedge pressure waveform",  # 'Pulmonary capillary wedge', 'Pulmonary capillary wedge pressure waveform', 'Pulmonary capillary wedge method'
+        "128449009": "Pulmonary artery wedge pressure waveform",  # 'Pulmonary artery wedge pressure waveform', 'Pulmonary artery wedge'
+        "128555001": "Congenital coronary artery fistula to left atrium",  # 'Congenital coronary artery fistula to left atrium', 'Fistula coronary to left atrium'
+        "128556000": "Congenital coronary artery fistula to left ventricle",  # 'Congenital coronary artery fistula to left ventricle', 'Fistula coronary to left ventricle'
+        "128558004": "Congenital coronary artery fistula to right ventricle",  # 'Fistula coronary to right ventricle', 'Congenital coronary artery fistula to right ventricle'
+        "128559007": "",  # 'Genicular artery', 'geniculate artery'
+        "128563000": "",  # 'Juxtaposed appendage', 'Juxtaposed atrial appendage'
+        "128564006": "",  # 'Left ventricle apical segment', 'Apex of left ventricle', 'Left ventricle apex', 'apex of left ventricle'
+        "128565007": "",  # 'Apex of right ventricle', 'Right ventricle apex'
+        "128586007": "",  # 'Pulmonary chamber in cor triatriatum', 'Pulmonary chamber of cor triatriatum'
+        "128617001": "",  # 'arteriovenous fistula', 'AV Fistula'
+        "128965002": "",  # 'Handgrip', 'Hand grip'
+        "129113006": "",  # 'Intra-Aortic Balloon Pump (IABP)', 'Intra-Aortic Balloon Pump'
+        "129504001": "Oxygen-15",  # 'Oxygen O^15^', '^15^Oxygen'
+        "133882006": "",  # 'Drug Infusion Challenge', 'Drug infusion'
+        "161445009": "",  # 'History of Diabetes', 'History of - diabetes mellitus', 'History of diabetes mellitus'
+        "164854000": "",  # 'Normal ECG', 'Normal'
+        "165079009": "",  # 'Exercise Tolerance Test', 'Exercise stress test'
+        "165084003": "",  # 'Abnormal exercise tolerance test', 'Exercise ECG abnormal'
+        "237897009": "",  # 'Vascular Calcification', 'Calcified'
+        "241663008": "",  # 'vascular MRI', 'Magnetic resonance angiography'
+        "244251006": "",  # 'Septal Artery', '1st Septal Coronary Artery'
+        "261004008": "",  # 'Diagnostic intent', 'Diagnostic', 'Diagnostic Intent'
+        "262061000": "",  # 'Postoperative', 'Post-operative'
+        "262068006": "",  # 'Preoperative', 'Pre-operative'
+        "263677008": "",  # 'Antegrade Flow', 'Antegrade Direction'
+        "279336005": "",  # 'Posterior cerebral commissure', 'posterior commissure', 'Posterior Commissure'
+        "286558002": "",  # 'Ureteric stent', 'Ureteral stent'
+        "312004007": "",  # 'Retrograde Direction', 'Retrograde Flow'
+        "360156006": "",  # 'Screening Intent', 'Screening'
+        "363654007": "",  # 'Orbit', 'Orbital structure'
+        "371244009": "Yellow",  # 'Yellow color', 'Yellow'
+        "371246006": "Green",  # 'Green', 'Green color'
+        "371251000": "White",  # 'White', 'White color'
+        "371252007": "Black",  # 'Black color', 'Black'
+        "371253002": "Gray",  # 'Gray', 'Gray color'
+        "371254008": "Brown",  # 'Brown', 'Brown color'
+        "371895000": "",  # 'Culprit Lesion', 'Culprit'
+        "373098007": "",  # 'Mean Value of population', 'Averaged', 'Mean'
+        "373099004": "",  # 'Median', 'Median Value of population'
+        "373112006": "",  # 'Murmur', 'Evaluation of murmur'
+        "373825000": "",  # 'Staging', 'Staging intent'
+        "385294005": "",  # 'Salivary gland', 'Salivary Glands', 'salivary gland'
+        "389080008": "",  # 'White matter of brain and spinal cord', 'White Matter'
+        "397421006": "",  # 'Vessel Origin', 'Origin of vessel'
+        "399162004": "",  # 'caudad', 'cranio-caudal'
+        "399163009": "",  # 'Magnification views', 'Magnification'
+        "399173006": "",  # 'left lateral', 'Left Lateral', 'Right-left lateral'
+        "399196006": "",  # 'caudo-cranial (from below)', 'cephalad', 'caudo-cranial', 'Caudocranial'
+        "399198007": "",  # 'right lateral', 'Left-right lateral'
+        "399214001": "",  # 'Four chamber', 'Apical four chamber'
+        "399232001": "",  # 'Two chamber', 'Apical two chamber'
+        "399260004": "",  # 'medial-lateral', 'medio-lateral', 'Mediolateral'
+        "399352003": "",  # 'Lateral-Medial', 'Lateromedial', 'lateral-medial', 'latero-medial'
+        "399368009": "",  # 'Medio-Lateral', 'medio-lateral oblique'
+        "400210000": "",  # 'angioma', 'Hemangioma'
+        "413896006": "",  # 'Common Iliac Bifurcation', 'Common Iliac Artery Bifurcation', 'Common iliac artery bifurcation'
+        "417746004": "",  # 'trauma', 'Traumatic Abnormality'
+        "419442005": "",  # 'Ethanol', 'Ethyl alcohol'
+        "424064009": "",  # 'Pharmacologic stress test', 'Pharmacologic Stress protocol', 'Pharmacological stress test'
+        "424118002": "Technetium-99m tetrofosmin",  # 'Tc-99m tetrofosmin', 'Technetium Tc^99m^Tetrofosmin'
+        "424299003": "Technetium-99m sestamibi",  # 'Tc-99m sestamibi', 'Technetium Tc^99m^ sestamibi'
+        "428685003": "",  # 'Paced stress test', 'Stress test using cardiac pacing'
+        "430757002": "",  # 'Pulmonary Vein', 'Pulmonary Vein Great Vessel'
+        "444371003": "",  # 'Ventricular Ejection (S-wave)', 'Ventricular Ejection'
+        "444392003": "",  # 'Diastolic Rapid Inflow (E-wave)', 'Diastolic Rapid Inflow'
+        "468440006": "",  # 'Digital imager', 'Digital imager, radiation therapy'
+        "698247007": "",  # 'Cardiac Arrhythmia', 'Arrhythmia'
+        "710864009": "",  # 'Arterial dissection', 'dissecting aneurysm', 'arterial dissection'
+        "816094009": "",  # 'Chest', 'Thorax'
+        "816989007": "",  # 'Pelvic cavity, false and/or true', 'Intra-pelvic'
+        "818987002": "",  # 'Abdominopelvic cavity', 'Intra-abdominopelvic'
+        # Fixes for invalid first characters
+        "91750005": "First Diagonal Coronary Artery",  # 1st Diagonal Coronary Artery
+        "91751009": "Second Diagonal Coronary Artery",  # 2nd Diagonal Coronary Artery
+        "91752002": "Third Diagonal Coronary Artery",  # 3rd diagonal Coronary Artery
+        "91754001": "First Marginal Coronary Artery",  # 1st Marginal Coronary Artery
+        "91755000": "Second Marginal Coronary Artery",  # 2nd Marginal Coronary Artery
+        "91756004": "Third Marginal Coronary Artery",  # 3rd Marginal Coronary Artery
+        "91757008": "First Left Posterolateral Coronary Artery",  # 1st Left Posterolateral Coronary Artery
+        "91758003": "Second Left Posterolateral Coronary Artery",  # 2nd Left Posterolateral Coronary Artery
+        "91759006": "Third Left Posterolateral Coronary Artery",  # 3rd Left Posterolateral Coronary Artery
+        "91761002": "First Right posterolateral Coronary Artery",  # 1st Right posterolateral Coronary Artery
+        "91762009": "Second Right posterolateral Coronary Artery",  # 2nd Right posterolateral Coronary Artery
+        "91763004": "Third Right posterolateral Coronary Artery",  # 3rd Right posterolateral Coronary Artery
+        "129772004": "One OClock Position",  # 1 o'clock position
+        "129773009": "Two OClock Position",  # 2 o'clock position
+        "129774003": "Three OClock Position",  # 3 o'clock position
+        "129775002": "Four OClock Position",  # 4 o'clock position
+        "129776001": "Five OClock Position",  # 5 o'clock position
+        "129777005": "Six OClock Position",  # 6 o'clock position
+        "129778000": "Seven OClock Position",  # 7 o'clock position
+        "129779008": "Eight OClock Position",  # 8 o'clock position
+        "129780006": "Nine OClock Position",  # 9 o'clock position
+        "129781005": "Ten OClock Position",  # 10 o'clock position
+        "129782003": "Eleven OClock Position",  # 11 o'clock position
+        "129783008": "Twelve OClock Position",  # 12 o'clock position
+        "268400002": "TwelveLeadECG",  # 12-Lead ECG
+        "371864007": "Two_Partial Perfusion",  # 2: Partial Perfusion
+        "371865008": "Three_Complete Perfusion",  # 3: Complete Perfusion
+        "371866009": "One_Penetration without Perfusion",  # 1: Penetration without Perfusion
+        "371867000": "Zero_No Perfusion",  # 0: No Perfusion
+        "371884006": "PlusMinus range of measurement uncertainty",  # +/-, range of measurement uncertainty
+        "371885007": "Minus range of lower measurement uncertainty",  # -, range of lower measurement uncertainty
+        "371886008": "Plus range of upper measurement uncertainty",  # +, range of upper measurement uncertainty
+        "371887004": "Nintieth Percentile Value of population",  # 90th Percentile Value of population
+        "371888009": "Fifth Percentile Value of population",  # 5th Percentile Value of population
+        "371889001": "Ninety Fifth Percentile Value of population",  # 95th Percentile Value of population
+        "371890005": "Tenth Percentile Value of population",  # 10th Percentile Value of population
+        "371917008": "OneSigmaUpperValueOfPopulation",  # 1 Sigma Upper Value of population
+        "371918003": "TwoSigmaLowerValueOfPopulation",  # 2 Sigma Lower Value of population
+        "371919006": "OneSigmaLowerValueOfPopulation",  # 2 Sigma Upper Value of population
+        "371920000": "TwoSigmaUpperValueOfPopulation",  # 1 Sigma Lower Value of population
+        "399064001": "TwoDMode",  # 2D Mode
+        "425808002": "EighteenLeadECG",  # 18-Lead ECG
+        "426865009": "ThreeDMode",  # 3D Mode
+        "429163003": "FifteenLeadECG",  # 15-Lead ECG
+    },
+    "UCUM": {
+        "mm": "millimeter",
+        "um": "micrometer",
+        "s": "second",
+        "cm": "centimeter",
+        "Hz": "Hertz",
+        "Centimeter**2": "square centimeter",
+        "/s": "PerSecond",
+        "/min": "PerMinute",
+        "/cm": "PerCentimeter",
+        "{MU}/s": "MonitorUnitsPerSecond",
+        "mg/cm3": "MilligramsPerCubicCentimeter",
+        "10-6.mm2/s": "",  # FIXME
+    },
+    "NCIt": {"C142184": "FourKScore"},  # 4Kscore
+    "LN": {
+        "20256-4": "",  # ['Mean Gradient [Pressure] by Doppler', 'Mean Gradient']
+        "46305-9": "",  # ['Whole body CT', 'whole body ct']
+        "19218-7": "",  # ['Arterial Oxygen content', 'Arterial Content (FCa)']
+        "25056-3": "",  # ['MRI unspecified body region', 'MRI Report']
+        "59092-7": "Percent Thickening",  # % Thickening
+        "25045-6": "",  # ['CT unspecified body region', 'CT Report']
+        "33878-0": "",  # ['Volume flow', 'Volume Flow', 'Volume Flow Rate']
+        "19220-3": "",  # ['Venous Oxygen content', 'Venous Content (FCv)']
+        "18071-1": "",  # ['Left Ventricular Isovolumic Relaxation Time', 'Left ventricular isovolumic relaxation time by Doppler']
+        "20352-1": "",  # ['Mean Blood Velocity', 'Time averaged mean velocity', 'Time Averaged Mean Velocity']
+        "20167-3": "",  # ['Acceleration Slope', 'Acceleration Index']
+        "44136-0": "",  # ['PET Scan Report', 'PET unspecified body region']
+        "44139-4": "",  # ['PET whole body', 'whole body pt w rnc iv']
+        "24590-2": "",  # ['Brain MRI', 'MRI Head Report']
+        "39632-5": "",  # ['Brain SPECT', 'SPECT brain']
+        "20247-3": "",  # ['Peak Gradient [Pressure]', 'Peak Gradient']
+        "59090-1": "",  # ['ROI Internal Dimension by US', 'Internal Dimension']
+        "49118-3": "",  # ['NM unspecified body region', 'Nuclear Medicine Report']
+        "43468-8": "",  # ['XR unspecified body region', 'X-Ray Report']
+        "24725-4": "",  # ['CT Head Report', 'Head CT']
+        "59089-3": "",  # ['ROI Thickness by US', 'Thickness']
+    },
+    "PUBCHEM_CID": {"4624": "Six_Hydroxydopamine"},  # 6-hydroxydopamine
+    "MDC": {
+        "2:15872": "",  # ['PR interval global', 'PR time period, global']
+        "2:16140": "",  # ['PP time period, global', 'PP interval global']
+        "2:23872": "FourteenAndSizeHertzPositiveBursts",  # 14 and 6 Hz positive bursts
+        "2:32768": "",  # ['PP time period, per lead', 'PP interval per lead']
+        "10:11284": "Twelve-lead from EASI leads (ES, AS, AI) by Dower/EASI transformation",  # 12-lead from EASI leads (ES, AS, AI) by Dower/EASI transformation
+        "2:16160": "",  # ['QT interval global', 'QT duration, global']
+        "10:11268": "Twelve-lead electrode pad",  # 12-lead electrode pad
+        "10:11271": "Twelve-lead for bicycle exercise testing, limb leads on back of patient",  # 12-lead for bicycle exercise testing, limb leads on back of patient
+        "10:11285": "Twelve-lead from Limb Leads (I, II) and one or more V leads",  # 12-lead from Limb Leads (I, II) and one or more V leads
+        "10:11283": "Twelve-lead from Frank leads XYZ leads by Dower transformation",  # 12-lead from Frank leads XYZ leads by Dower transformation
+        "2:33024": "",  # ['RR interval per lead', 'RR time period, per lead']
+        "2:8192": "",  # ['QT duration, per lead', 'QT interval per lead']
+        "10:11232": "",  # ['Severe noise', 'Severe Noise, beats cannot be detected or classified']
+        "10:11281": "",  # 3-lead system, CC5-CM5-ML
+        "10:11269": "Twelve-lead derived from Frank XYZ leads",  # 12-lead derived from Frank XYZ leads
+        "10:11270": "Twelve-lead derived from non-standard leads",  # 12-lead derived from non-standard leads
+        "10:11248": "",  # ['No signal', 'No ECG signal is available']
+        "10:11216": "",  # ['Moderate Noise, beats can be detected but cannot be classified', 'Moderate noise']
+        "2:7168": "",  # ['PR interval per lead', 'P offset to QRS onset duration, per lead']
+        "2:65": "",  # −aVR
+        "10:11282": "",  # 3-lead system, CC5-CM5-CH5
+    },
+    "BARI": {
+        "21A": "Second Marginal Coronary Artery Laterals",  # 2nd Marginal Coronary Artery Laterals
+        "20A": "First Marginal Coronary Artery Laterals",  # 1st Marginal Coronary Artery Laterals
+        "15A": "FirstDiagonal Coronary Artery Laterals",  # 1st Diagonal Coronary Artery Laterals
+        "29A": "Third Diagonal Coronary Artery Laterals",  # 3rd Diagonal Coronary Artery Laterals
+        "22A": "Third Marginal Coronary Artery Laterals",  # 3rd Marginal Coronary Artery Laterals
+        "16A": "SecondDiagonal Coronary Artery Laterals",  # 2nd Diagonal Coronary Artery Laterals
+    },
+}
 
-
-def camel_case(s):
+def camel_case(s: str) -> str:
+    """Return a camel case version of `s`"""
     leave_alone = (
         "mm",
         "cm",
@@ -84,6 +456,10 @@ def camel_case(s):
         "mg",
         "kg",
     )  # ... probably need others
+
+    if s in MANUAL_CONVERSION:
+        return MANUAL_CONVERSION[s]
+
     return "".join(
         word.capitalize() if word != word.upper() and word not in leave_alone else word
         for word in re.split(r"\W", s, flags=re.UNICODE)
@@ -91,92 +467,470 @@ def camel_case(s):
     )
 
 
-def keyword_from_meaning(name):
-    """Return a camel case valid python identifier"""
+# ------------
+def keyword_from_meaning(name: str, scheme="") -> str:
+    """Return a camel case valid Python identifier"""
     # Try to adhere to keyword scheme in DICOM (CP850)
+    if scheme:
+        try:
+            name = TRANSLATIONS[scheme][name]
+        except KeyError:
+            pass
 
     # singular/plural alternative forms are made plural
     #     e.g., “Physician(s) of Record” becomes “PhysiciansOfRecord”
-    name = name.replace("(s)", "s")
+    kw = name.replace("(s)", "s")
 
     # “Patient’s Name” -> “PatientName”
     # “Operators’ Name” -> “OperatorsName”
-    name = name.replace("’s ", " ")
-    name = name.replace("'s ", " ")
-    name = name.replace("s’ ", "s ")
-    name = name.replace("s' ", "s ")
+    kw = kw.replace("’s ", " ")
+    kw = kw.replace("'s ", " ")
+    kw = kw.replace("s’ ", "s ")
+    kw = kw.replace("s' ", "s ")
 
     # Mathematical symbols
-    name = name.replace("%", " Percent ")
-    name = name.replace(">", " Greater Than ")
-    name = name.replace("=", " Equals ")
-    name = name.replace("<", " Lesser Than ")
+    kw = kw.replace("%", " Percent ")
+    kw = kw.replace(">", " Greater Than ")
+    kw = kw.replace("=", " Equals ")
+    kw = kw.replace("<", " Lesser Than ")
 
-    name = re.sub(r"([0-9]+)\.([0-9]+)", "\\1 Point \\2", name)
-    name = re.sub(r"\s([0-9.]+)-([0-9.]+)\s", " \\1 To \\2 ", name)
+    kw = re.sub(r"([0-9]+)\.([0-9]+)", "\\1 Point \\2", kw)
+    kw = re.sub(r"\s([0-9.]+)-([0-9.]+)\s", " \\1 To \\2 ", kw)
 
-    name = re.sub(r"([0-9]+)day", "\\1 Day", name)
-    name = re.sub(r"([0-9]+)y", "\\1 Years", name)
+    kw = re.sub(r"([0-9]+)day", "\\1 Day", kw)
+    kw = re.sub(r"([0-9]+)y", "\\1 Years", kw)
 
     # Remove category modifiers, such as "(specimen)", "(procedure)",
     # "(body structure)", etc.
-    name = re.sub(r"^(.+) \([a-z ]+\)$", "\\1", name)
+    kw = re.sub(r"^(.+) \([a-z ]+\)$", "\\1", kw)
 
-    name = camel_case(name.strip())
+    kw = camel_case(kw.strip())
 
     # Python variables must not begin with a number.
-    if re.match(r"[0-9]", name):
-        name = "_" + name
+    if re.match(r"[0-9]", kw):
+        kw = "_" + kw
 
-    return name
+    if not kw.isidentifier() or iskeyword(kw):
+        raise ValueError(f"Invalid keyword '{kw}' generated from '{name}'")
+
+    return kw
 
 
-def download_fhir_value_sets(local_dir):
-    ftp_host = "medical.nema.org"
+def debug_logger() -> None:
+    """Setup the logging for debugging."""
+    logger = logging.getLogger(__name__)
+    # Ensure only have one StreamHandler
+    logger.handlers = []
+    handler = logging.StreamHandler()
+    logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter("%(levelname).1s: %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
-    if not os.path.exists(local_dir):
-        os.makedirs(local_dir)
-    logger.info("storing files in " + local_dir)
-    logger.info(f'log into FTP server "{ftp_host}"')
-    ftp = ftplib.FTP(ftp_host, timeout=60)
+
+def download_fhir_value_sets(local_dir: Path) -> None | str:
+    """Log into the DICOM FTP server and download the zip file containing the
+    FHIR JSON files.
+
+    Parameters
+    ----------
+    local_dir : pathlib.Path
+        The directory where the zip file will be written to, as
+        ``local_dir/version/*.zip``.
+
+    Returns
+    -------
+    str | None
+        If the download failed then returns ``None``, otherwise returns the
+        DICOM version as :class:`str`.
+    """
+    LOGGER.debug(f"  Logging into FTP server: {FTP_HOST}")
+    ftp = ftplib.FTP(FTP_HOST, timeout=60)
     ftp.login("anonymous")
 
-    ftp_path = "medical/dicom/resources/valuesets/fhir/json"
-    logger.info(f'list files in directory "{ftp_path}"')
-    fhir_value_set_files = ftp.nlst(ftp_path)
+    version = None
 
     try:
-        for ftp_filepath in fhir_value_set_files:
-            ftp_filename = os.path.basename(ftp_filepath)
-            logger.info(f'retrieve value set file "{ftp_filename}"')
-            with BytesIO() as fp:
-                ftp.retrbinary(f"RETR {ftp_filepath}", fp.write)
-                content = fp.getvalue()
-            local_filename = os.path.join(local_dir, ftp_filename)
-            with open(local_filename, "wb") as f_local:
-                f_local.write(content)
+        LOGGER.debug(f"  Searching contents of '{FTP_PATH}' for JSON ZIP file")
+        for remote_path in ftp.nlst(FTP_PATH):
+            LOGGER.debug(f"    {remote_path}")
+            match = FTP_FHIR_REGEX.match(remote_path)
+            if match:
+                LOGGER.debug("  Found FHIR JSON ZIP file, downloading...")
+                with BytesIO() as fp:
+                    ftp.retrbinary(f"RETR {remote_path}", fp.write)
+                    data = fp.getvalue()
+
+                version = match.group('version')
+                (local_dir / version).mkdir(parents=True, exist_ok=True)
+                local_path = local_dir / version / Path(remote_path).name
+
+                LOGGER.debug(f"    Writing data to {local_path}")
+                with open(local_path, "wb") as f:
+                    f.write(data)
+
+                break
     finally:
         ftp.quit()
 
+    return version
+
+
+def extract_cid_files(path: Path, version: str, cid_folder="CIDs") -> None:
+    """Extract the JSON files in the downloaded ZIP file to ``path / cid_folder``.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        The base directory.
+    version : str
+        The name of the version subdirectory containing the ZIP file.
+    cid_folder : str, optional
+        The name of the subdirectory the CID files will be extracted to, default
+        ``CIDs``.
+    """
+    files = list((path / version).glob("*.zip"))
+    if not files:
+        raise ValueError(f"No zip files found in {path / version}")
+
+    if len(files) > 1:
+        raise ValueError(f"Multiple zip files found in {path / version}")
+
+    # Create the output directory (if it doesn't already exist)
+    cid_dir = path / cid_folder
+    cid_dir.mkdir(parents=True, exist_ok=True)
+    LOGGER.debug(f"  Extracting CID files to {cid_dir}")
+    with zipfile.ZipFile(files[0]) as z:
+        # Forcibly flatten the ZIP contents into the `cid_folder`
+        for zip_path in (Path(x) for x in z.namelist()):
+            with open(cid_dir / zip_path.name, 'wb') as f:
+                f.write(z.read(str(zip_path)))
+
+
+def process_files(cid_directory: Path) -> None:
+    """
+
+    Parameters
+    ----------
+    cid_directory : pathlib.Path
+        The path to the directory containing the CID JSON files.
+
+    """
+    LOGGER.info(f"Processing the CID JSON files in {cid_directory}")
+
+
+    # cid = {
+    #     ID: {
+    #         system:
+    #             {(code, display), ...}
+    #     }
+    # }
+    d = {}
+
+    # FIXME
+    # dict[str: dict[]]
+    # concepts = dict()
+
+    # FIXME
+    # cid_lists = dict()
+
+    # A dict mapping the CID ID to the CID's name; e.g. {606: "AnimalShelterType"}
+    # name_for_cid: dict[int, str] = dict()
+
+    # TODO: Testing only
+    # all_concept_codes = []
+    # all_concept_displays = []
+
+    # Pass 1: Read in all the data in the JSON files
+    cid_paths = sorted(cid_directory.glob("*.json"), key=lambda x: int(x.name.split("-")[3]))
+    for path in cid_paths:
+        LOGGER.debug(f"  Processing '{path.name}'")
+        with open(path, "rb") as f:
+            data = json.loads(f.read())
+
+        cid_id = int(CID_ID_REGEX.match(data["id"]).group(1))
+        cid_version = data["version"]
+        # cid_name[cid_id] = data["name"]
+
+        cid = d.setdefault(cid_id, {})
+
+        # FIXME
+        # cid_concepts = {}
+
+        for group in data["compose"]["include"]:
+            # "include":[
+            #    {
+            #        "system":"http://dicom.nema.org/resources/ontology/DCM",
+            #        "concept": [...],
+            #    }, ...
+            # ], ...
+            cid[group["system"]] = {(c["code"], c["display"]) for c in group["concept"]}
+
+    # Pass 2: Reformat the data into usable forms
+    e = {}
+    scheme_codes = {}
+    for cid_id, scheme_concepts in d.items():
+        for fhir_system, concepts in scheme_concepts.items():
+            try:
+                scheme_designator = FHIR_SYSTEM_TO_DICOM_SCHEME_DESIGNATOR[fhir_system]
+            except KeyError:
+                raise NotImplementedError(
+                    "The DICOM scheme designator for the following FHIR system "
+                    f"has not been specified: {fhir_system}"
+                )
+            # if scheme_designator == "UCUM":
+            #     print(cid_id, d[cid_id])
+            e[scheme_designator] = concepts
+
+            codes = scheme_codes.setdefault(scheme_designator, set())
+            codes.update(concepts)
+
+    # Check for variations in concept 'display' for each code
+    # Examples:
+    # SCT 111609: ('No Filter', 'No filter')
+    # SCT 66787007: ('Cranial', 'Cephalic')
+    # SCT 371246006: ('Green', 'Green color')
+    for scheme, codes in scheme_codes.items():
+        c = {}
+        for entry in codes:
+            displays = c.setdefault(entry[0], [])
+            displays.append(entry[1])
+
+        if scheme == "SCT":
+            items = sorted(c.items(), key=lambda x: int(x[0]))
+        else:
+            items = c.items()
+
+        for code, displays in items:
+            if len(displays) > 1:
+                # Check to see if multiple meanings can be conformed
+                conformed = set([keyword_from_meaning(x, scheme) for x in displays])
+                if len(conformed) == 1:
+                    c[code] = list(conformed)
+                else:
+                    # pass
+                    print(scheme, code, displays)
+            else:
+                # Fix isotopes with format ^NNN[m]^Somethingium
+                match = ISOTOPE_REGEX.match(displays[0])
+                if match:
+                    updated = f"{match.group('element')}-{match.group('isotope')}"
+                    if suffix := match.group('suffix'):
+                        updated = f"{updated} {suffix}"
+
+                    if len(updated) + 1 != len(displays[0]):
+                        raise ValueError(
+                            f"Error converting '{displays[0]}' -> '{updated}'"
+                        )
+
+                    # LOGGER.debug(f"Converting '{displays[0]}' -> '{updated}'")
+                    displays[0] = updated
+
+                if scheme in TRANSLATIONS and code in TRANSLATIONS[scheme]:
+                    updated = TRANSLATIONS[scheme][code]
+                    if updated:
+                        displays[0] = updated
+
+                if displays[0][0].isnumeric() or not displays[0][0].isalnum():
+                    print(scheme, code, displays[0])
+
+                if "^" in displays[0]:
+                    print(scheme, code, displays[0])
+
+        # all_codes = [v[0] for v in codes]
+        # print(scheme, len(all_codes), len(set(all_codes)))
+
+    # print(scheme_codes)
+    # print(e["UCUM"])
+
+
+
+            # fhir_system = group["system"]
+            # try:
+            #     scheme_designator = FHIR_SYSTEM_TO_DICOM_SCHEME_DESIGNATOR[fhir_system]
+            # except KeyError:
+            #     raise NotImplementedError(
+            #         "The DICOM scheme designator for the following FHIR system "
+            #         f"has not been specified: {fhir_system}"
+            #     )
+
+            # if scheme_designator not in concepts:
+            #     concepts[scheme_designator] = dict()
+
+            # "concept": [
+            #     {
+            #         "code":"130290",
+            #         "display":"Median"
+            #     },
+            #     ...
+            # ],
+            # for concept in group["concept"]:
+            #     cid_system = set
+            #     all_concept_codes.append(concept["code"].strip())
+            #     all_concept_displays.append(concept["display"].strip())
+            #
+            #     concept_code = concept["code"].strip()
+            #     concept_display = concept["display"].strip()
+            #
+            #     # Not guaranteed to be unique amongst all CIDs
+            #     concept_keyword = keyword_from_meaning(concept["display"])
+            #
+            #     # If new name under this scheme, start dict of codes/cids that use that code
+            #     if concept_keyword not in concepts[scheme_designator]:
+            #         concepts[scheme_designator][concept_keyword] = {concept_code: (concept_display, [cid_id])}
+            #     else:
+            #         prior = concepts[scheme_designator][concept_keyword]
+            #         if concept_code in prior:
+            #             prior[concept_code][1].append(cid_id)
+            #         else:
+            #             prior[concept_code] = (concept_display, [cid_id])
+            #
+            #         if prior[concept_code][0].lower() != concept_display.lower():
+            #             # Meanings can only be different by symbols, etc.
+            #             #    because converted to same keyword.
+            #             #    Nevertheless, print as info
+            #             LOGGER.info(
+            #                 f"CID{cid_id}: '{concept_keyword}' with meaning '{concept_display}' previously "
+            #                 f"'{prior[concept_code][0]}' in cids {prior[concept_code][1]}"
+            #             )
+            #
+            #     # Keep track of this cid referencing that name
+            #     if scheme_designator not in cid_concepts:
+            #         cid_concepts[scheme_designator] = []
+            #
+            #     if concept_keyword in cid_concepts[scheme_designator]:
+            #         LOGGER.warning(
+            #             f"'{concept_keyword}': Meaning '{concept_display}' in cid_{cid_id} is duplicated!"
+            #         )
+            #
+            #     cid_concepts[scheme_designator].append(concept_keyword)
+
+        # cid_lists[cid_id] = cid_concepts
+
+
+    # # The same code can appear in multiple CIDs
+    # print("Number of codes:", len(all_concept_codes))
+    # print("Number of unique codes:", len(set(all_concept_codes)))
+    # # The same display can appear in multiple CIDs
+    # print("Number of displays:", len(all_concept_displays))
+    # print("Number of displays:", len(set(all_concept_displays)))
+    #
+    # # There are fewer unique keywords than unique displays
+    # print("Number of keywords:", len([keyword_from_meaning(x) for x in all_concept_displays]))
+    # print("Number of unique keywords:", len(set(keyword_from_meaning(x) for x in all_concept_displays)))
+
+
+    return
+
+    if False:
+
+        name_for_cid[cid] = value_set["name"]
+        cid_concepts = {}
+        for group in value_set["compose"]["include"]:
+            system = group["system"]
+            try:
+                scheme_designator = FHIR_SYSTEM_TO_DICOM_SCHEME_DESIGNATOR[system]
+            except KeyError:
+                raise NotImplementedError(
+                    "The DICOM scheme designator for the following FHIR system "
+                    f"has not been specified: {system}"
+                )
+            if scheme_designator not in concepts:
+                concepts[scheme_designator] = dict()
+
+            for concept in group["concept"]:
+                name = keyword_from_meaning(concept["display"])
+                code = concept["code"].strip()
+                display = concept["display"].strip()
+
+                # If new name under this scheme, start dict of codes/cids that use that code
+                if name not in concepts[scheme_designator]:
+                    concepts[scheme_designator][name] = {code: (display, [cid])}
+                else:
+                    prior = concepts[scheme_designator][name]
+                    if code in prior:
+                        prior[code][1].append(cid)
+                    else:
+                        prior[code] = (display, [cid])
+
+                    if prior[code][0].lower() != display.lower():
+                        # Meanings can only be different by symbols, etc.
+                        #    because converted to same keyword.
+                        #    Nevertheless, print as info
+                        LOGGER.info(
+                            f"'{name}': Meaning '{display}' in cid_{cid}, previously "
+                            f"'{prior[code][0]}' in cids {prior[code][1]}"
+                        )
+
+                # Keep track of this cid referencing that name
+                if scheme_designator not in cid_concepts:
+                    cid_concepts[scheme_designator] = []
+
+                if name in cid_concepts[scheme_designator]:
+                    LOGGER.warning(
+                        f"'{name}': Meaning '{concept["display"]}' in cid_{cid} is duplicated!"
+                    )
+
+                cid_concepts[scheme_designator].append(name)
+
+        cid_lists[cid] = cid_concepts
+
+    scheme_designator = "SCT"
+    snomed_codes = get_table_o1()
+    for code, srt_code, meaning in snomed_codes:
+        name = keyword_from_meaning(meaning)
+        if name not in concepts[scheme_designator]:
+            concepts[scheme_designator][name] = {code: (meaning, [])}
+        else:
+            prior = concepts[scheme_designator][name]
+            if code not in prior:
+                prior[code] = (meaning, [])
+
+    scheme_designator = "DCM"
+    dicom_codes = get_table_d1()
+    for code, meaning in dicom_codes:
+        name = keyword_from_meaning(meaning)
+        if name not in concepts[scheme_designator]:
+            concepts[scheme_designator][name] = {code: (meaning, [])}
+        else:
+            prior = concepts[scheme_designator][name]
+            if code not in prior:
+                prior[code] = (meaning, [])
+# ---------------
+
 
 def _parse_html(content):
-    # from lxml import html
-    # doc = html.document_fromstring(content)
     return ET.fromstring(content, parser=ET.XMLParser(encoding="utf-8"))
 
 
 def _download_html(url):
-    response = urllib_request.urlopen(url)
-    return response.read()
+    return urllib_request.urlopen(url).read()
 
 
 def _get_text(element):
-    text = "".join(element.itertext())
-    return text.strip()
+    return "".join(element.itertext()).strip()
 
 
-def get_table_o1():
-    logger.info("process Table O1")
+def get_table_o1() -> list[tuple[str, str, str]]:
+    """Return the contents of PS3.16, Table O-1.
+
+    SNOMED Concept ID to SNOMED ID Mapping
+
+    +------------+-----------+----------------------------------------+
+    | Concept ID | SNOMED ID | SNOMED Fully Specified Name            |
+    | (SCT)      | (SRT)     |                                        |
+    +============+===========+========================================+
+    | 111002     | T-B7000   | Parathyroid structure (body structure) |
+    +------------+-----------+----------------------------------------+
+    | ...        | ...       | ...                                    |
+    +------------+-----------+----------------------------------------+
+
+    Returns
+    -------
+    list[tuple[str, str, str]]
+        A list of (???, ???, ???)
+    """
+    LOGGER.info("Processing PS3.16 Table O-1")
     url = "http://dicom.nema.org/medical/dicom/current/output/chtml/part16/chapter_O.html#table_O-1"
     root = _parse_html(_download_html(url))
     namespaces = {"w3": root.tag.split("}")[0].strip("{")}
@@ -196,8 +950,27 @@ def get_table_o1():
     return data
 
 
-def get_table_d1():
-    logger.info("process Table D1")
+def get_table_d1() -> list[tuple[str, str]]:
+    """Return the contents of PS3.16, Table D-1.
+
+    DICOM Controlled Terminology Definitions (Coding Scheme Designator "DCM"
+    Coding Scheme Version "01")
+
+    +------------+--------------+-----------------------------+-------+
+    | Code Value | Code Meaning | Definition                  | Notes |
+    +============+==============+=============================+=======+
+    | ANN        | Annotation   | A device, process or method |       |
+    |            |              |that produces annotations    |       |
+    +------------+--------------+-----------------------------+-------+
+    | ...        | ...          | ...                         |       |
+    +------------+--------------+-----------------------------+-------+
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of (???, ???)
+    """
+    LOGGER.info("Processing PS3.16 Table D-1")
     url = "http://dicom.nema.org/medical/dicom/current/output/chtml/part16/chapter_D.html#table_D-1"
     root = _parse_html(_download_html(url))
     namespaces = {"w3": root.tag.split("}")[0].strip("{")}
@@ -261,123 +1034,63 @@ def write_snomed_mapping(snomed_codes):
         f_concepts.write("\nmapping['{}'] = {{\n".format("SCT"))
         for sct, srt, meaning in snomed_codes:
             f_concepts.write(f"    '{sct}': '{srt}',\n")
+
         f_concepts.write("}\n")
 
         f_concepts.write("\nmapping['{}'] = {{\n".format("SRT"))
         for sct, srt, meaning in snomed_codes:
             f_concepts.write(f"     '{srt}': '{sct}',\n")
+
         f_concepts.write("}")
 
 
+def setup_argparse():
+    debug_logger()
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Update the sr/ code and concepts dictionaries"
+        ),
+        usage="generate_concept_dicts.py path [options]",
+    )
+
+    opts = parser.add_argument_group("Options")
+    opts.add_argument(
+        "path",
+        help="The path to download the JSON CID files to",
+        type=str,
+    )
+    opts.add_argument(
+        "--download",
+        help="Download the FHIR JSON CID files",
+        action="store_true",
+    )
+    opts.add_argument(
+        "--cid-directory",
+        help="The name of the directory where the CID should be located",
+        type=str,
+        default="CIDs",
+    )
+
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    # logging.basicConfig(level=logging.INFO)
 
-    local_dir = tempfile.gettempdir()
-    fhir_dir = os.path.join(local_dir, "fhir")
+    args = setup_argparse()
+    path = Path(args.path).resolve()
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+    elif not path.is_dir():
+        raise ValueError("'path' must be a path to a directory")
 
-    if not os.path.exists(fhir_dir) or not os.listdir(fhir_dir):
-        download_fhir_value_sets(fhir_dir)
-    else:
-        msg = "Using locally downloaded files\n"
-        msg += "from directory " + fhir_dir
-        logging.info(msg)
+    if args.download:
+        LOGGER.info(f"Downloading CID files to {path / args.cid_directory}")
+        version = download_fhir_value_sets(path)
+        if version:
+            extract_cid_files(path, version, args.cid_directory)
+        else:
+            LOGGER.error(f"Failed to download the CID files")
 
-    fhir_value_set_files = glob.glob(os.path.join(fhir_dir, "*"))
-    cid_pattern = re.compile("^dicom-cid-([0-9]+)-[a-zA-Z]+")
-
-    concepts = dict()
-    cid_lists = dict()
-    name_for_cid = dict()
-
-    # XXX = 0
-    try:
-        for ftp_filepath in fhir_value_set_files:
-            ftp_filename = os.path.basename(ftp_filepath)
-            logger.info(f'process file "{ftp_filename}"')
-
-            with open(ftp_filepath, "rb") as fp:
-                content = fp.read()
-                value_set = json.loads(content)
-
-            cid_match = cid_pattern.search(value_set["id"])
-            cid = int(cid_match.group(1))  # can take int off to store as string
-
-            name_for_cid[cid] = value_set["name"]
-            cid_concepts = {}
-            for group in value_set["compose"]["include"]:
-                system = group["system"]
-                try:
-                    scheme_designator = FHIR_SYSTEM_TO_DICOM_SCHEME_DESIGNATOR[system]
-                except KeyError:
-                    raise NotImplementedError(
-                        "The DICOM scheme designator for the following FHIR system "
-                        f"has not been specified: {system}"
-                    )
-                if scheme_designator not in concepts:
-                    concepts[scheme_designator] = dict()
-
-                for concept in group["concept"]:
-                    name = keyword_from_meaning(concept["display"])
-                    code = concept["code"].strip()
-                    display = concept["display"].strip()
-
-                    # If new name under this scheme, start dict of codes/cids that use that code
-                    if name not in concepts[scheme_designator]:
-                        concepts[scheme_designator][name] = {code: (display, [cid])}
-                    else:
-                        prior = concepts[scheme_designator][name]
-                        if code in prior:
-                            prior[code][1].append(cid)
-                        else:
-                            prior[code] = (display, [cid])
-
-                        if prior[code][0].lower() != display.lower():
-                            # Meanings can only be different by symbols, etc.
-                            #    because converted to same keyword.
-                            #    Nevertheless, print as info
-                            msg = "'{}': Meaning '{}' in cid_{}, previously '{}' in cids {}"
-                            msg = msg.format(
-                                name, display, cid, prior[code][0], prior[code][1]
-                            )
-                            logger.info(msg)
-
-                    # Keep track of this cid referencing that name
-                    if scheme_designator not in cid_concepts:
-                        cid_concepts[scheme_designator] = []
-                    if name in cid_concepts[scheme_designator]:
-                        msg = "'{}': Meaning '{}' in cid_{} is duplicated!"
-                        msg = msg.format(name, concept["display"], cid)
-                        logger.warning(msg)
-                    cid_concepts[scheme_designator].append(name)
-            cid_lists[cid] = cid_concepts
-            # if XXX > 3:
-            #    break
-            # XXX += 1
-
-        scheme_designator = "SCT"
-        snomed_codes = get_table_o1()
-        for code, srt_code, meaning in snomed_codes:
-            name = keyword_from_meaning(meaning)
-            if name not in concepts[scheme_designator]:
-                concepts[scheme_designator][name] = {code: (meaning, [])}
-            else:
-                prior = concepts[scheme_designator][name]
-                if code not in prior:
-                    prior[code] = (meaning, [])
-
-        scheme_designator = "DCM"
-        dicom_codes = get_table_d1()
-        for code, meaning in dicom_codes:
-            name = keyword_from_meaning(meaning)
-            if name not in concepts[scheme_designator]:
-                concepts[scheme_designator][name] = {code: (meaning, [])}
-            else:
-                prior = concepts[scheme_designator][name]
-                if code not in prior:
-                    prior[code] = (meaning, [])
-
-    finally:
-        # If any error or KeyboardInterrupt, close up and write what we have
-
-        write_concepts(concepts, cid_concepts, cid_lists, name_for_cid)
-        write_snomed_mapping(snomed_codes)
+    process_files(path / args.cid_directory)

@@ -207,6 +207,11 @@ Enhancements
   (if present, although it's non-conformant for it to be) (:issue:`2073`)
 * Added support for NumPy v2.0 (:issue:`2075`)
 
+* Added the version of the DICOM Standard used to generate the Concept IDs to
+  ``_version.__concepts_version__`` (:issue:`1021`)
+* Updates the Concept IDs to version 2024c of the DICOM Standard (:issue:`1914`)
+* Refactored the ``sr.codes`` implementation to simplify the interface (:issues:`1454`)
+* Fixed a Python keyword issue with with sr.codes (:issue:`1273`)
 
 Fixes
 -----

@@ -635,11 +635,7 @@ def process_files(cid_directory: Path) -> None:
     # cid_lists = dict()
 
     # A dict mapping the CID ID to the CID's name; e.g. {606: "AnimalShelterType"}
-    # name_for_cid: dict[int, str] = dict()
-
-    # TODO: Testing only
-    # all_concept_codes = []
-    # all_concept_displays = []
+    name_for_cid: dict[int, str] = dict()
 
     # Pass 1: Read in all the data in the JSON files
     cid_paths = sorted(cid_directory.glob("*.json"), key=lambda x: int(x.name.split("-")[3]))
@@ -650,7 +646,7 @@ def process_files(cid_directory: Path) -> None:
 
         cid_id = int(CID_ID_REGEX.match(data["id"]).group(1))
         cid_version = data["version"]
-        # cid_name[cid_id] = data["name"]
+        name_for_cid[cid_id] = data["name"]
 
         cid = d.setdefault(cid_id, {})
 
@@ -658,13 +654,55 @@ def process_files(cid_directory: Path) -> None:
         # cid_concepts = {}
 
         for group in data["compose"]["include"]:
-            # "include":[
-            #    {
-            #        "system":"http://dicom.nema.org/resources/ontology/DCM",
-            #        "concept": [...],
-            #    }, ...
-            # ], ...
             cid[group["system"]] = {(c["code"], c["display"]) for c in group["concept"]}
+
+    # Pass 2: Validate the data
+    # A: Confirm that the translation from 'display' to Python keyword produces
+    #   unique keywords for each 'code'
+    code_attr = {}
+    attr_code = {}
+    for cid_id, scheme_concepts in d.items():
+        # Build a list of (code, attribute keyword)
+        for entries in scheme_concepts.values():
+            for entry in entries:
+                keyword = keyword_from_meaning(entry[1])
+
+                attrs = code_attr.setdefault(entry[0], [])
+                attrs.append(keyword)
+
+                codes = attr_code.setdefault(keyword, [])
+                codes.append(entry[0])
+
+
+            # code_attr.extend(
+            #     [(entry[0], ) for entry in entries]
+            # )
+            # if len(entry) > 1:
+            #     print(entry)
+            #     raise NotImplementedError("Ooops")
+            #
+            # entry = list(entry)[0]
+            # code_attr.append((entry[0], keyword_from_meaning(entry[1])))
+
+    for code, attrs in code_attr.items():
+        attrs = set(attrs)
+        if len(attrs) > 1:
+            print(code, attrs)
+
+    for attr, codes in attr_code.items():
+        codes = set(codes)
+        if len(codes) > 1:
+            print(attr, codes)
+
+
+    # unique = set(code_attr)
+    # keys = [x[1] for x in unique]
+    # codes = [x[0] for x in unique]
+
+    # print(len(keys), len(set(keys)))
+    # print(len(codes), len(set(codes)))
+
+    return
 
     # Pass 2: Reformat the data into usable forms
     e = {}
@@ -678,8 +716,7 @@ def process_files(cid_directory: Path) -> None:
                     "The DICOM scheme designator for the following FHIR system "
                     f"has not been specified: {fhir_system}"
                 )
-            # if scheme_designator == "UCUM":
-            #     print(cid_id, d[cid_id])
+
             e[scheme_designator] = concepts
 
             codes = scheme_codes.setdefault(scheme_designator, set())
@@ -739,11 +776,6 @@ def process_files(cid_directory: Path) -> None:
 
         # all_codes = [v[0] for v in codes]
         # print(scheme, len(all_codes), len(set(all_codes)))
-
-    # print(scheme_codes)
-    # print(e["UCUM"])
-
-
 
             # fhir_system = group["system"]
             # try:
@@ -896,6 +928,20 @@ def process_files(cid_directory: Path) -> None:
             prior = concepts[scheme_designator][name]
             if code not in prior:
                 prior[code] = (meaning, [])
+
+
+def check_snomed_version(dict_version: str) -> None:
+    """
+    """
+    from pydicom import _version
+
+    lib_version = getattr(_version, "__snomed_dicom_version__", None)
+    if lib_version != dict_version:
+        LOGGER.error(
+            "Warning: 'pydicom._version.__snomed_dicom_version__' needs to be "
+            f"updated to '{dict_version}'"
+        )
+
 # ---------------
 
 
@@ -1071,6 +1117,11 @@ def setup_argparse():
         type=str,
         default="CIDs",
     )
+    opts.add_argument(
+        "--version",
+        help="The version of the downloaded CID ZIP file",
+        type=str,
+    )
 
     return parser.parse_args()
 
@@ -1086,11 +1137,18 @@ if __name__ == "__main__":
         raise ValueError("'path' must be a path to a directory")
 
     if args.download:
+        # Download the ZIP file containing the JSON data
         LOGGER.info(f"Downloading CID files to {path / args.cid_directory}")
         version = download_fhir_value_sets(path)
         if version:
             extract_cid_files(path, version, args.cid_directory)
         else:
             LOGGER.error(f"Failed to download the CID files")
+    elif args.version:
+        # Use the already downloaded ZIP file
+        extract_cid_files(path, args.version, args.cid_directory)
 
     process_files(path / args.cid_directory)
+
+
+    # check_snomed_version(version)

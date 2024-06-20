@@ -2,7 +2,12 @@ import pytest
 
 from pydicom.sr._cid_dict import cid_concepts as CID_CONCEPTS
 from pydicom.sr.coding import Code
-from pydicom.sr.codedict import codes, _CID_Dict, _CodesDict
+from pydicom.sr.codedict import (
+    codes,
+    _CID_Dict,
+    _CodesDict,
+    concepts,
+)
 
 
 @pytest.fixture()
@@ -388,3 +393,218 @@ class TestCIDDict:
         msg = f"Multiple schemes found for '{attr}' in CID 6129: SCT, FOO"
         with pytest.raises(AttributeError, match=msg):
             getattr(_CID_Dict(cid), attr)
+
+
+# -----
+
+class TestConcepts:
+    def test_dcm_1(self):
+        assert concepts.DCM.Modality == Code(
+            value="121139", scheme_designator="DCM", meaning="Modality"
+        )
+
+    def test_dcm_2(self):
+        assert concepts.DCM.ProcedureReported == Code(
+            value="121058",
+            scheme_designator="DCM",
+            meaning="Procedure Reported",
+        )
+
+    def test_dcm_3(self):
+        assert concepts.DCM.ImagingStartDatetime == Code(
+            value="122712",
+            scheme_designator="DCM",
+            meaning="Imaging Start DateTime",
+        )
+
+    def test_sct_1(self):
+        assert concepts.SCT._1SigmaLowerValueOfPopulation == Code(
+            value="371919006",
+            scheme_designator="SCT",
+            meaning="1 Sigma Lower Value of Populuation",
+        )
+
+    def test_sct_2(self):
+        assert concepts.SCT.FindingSite == Code(
+            value="363698007", scheme_designator="SCT", meaning="Finding Site"
+        )
+
+    def test_cid250(self):
+        assert concepts.cid250.Positive == Code(
+            value="10828004", scheme_designator="SCT", meaning="Positive"
+        )
+
+    def test_cid300(self):
+        assert concepts.cid300.NickelCobaltChromium == Code(
+            value="261249004",
+            scheme_designator="SCT",
+            meaning="Nickel cobalt chromium",
+        )
+
+    def test_cid301(self):
+        assert concepts.cid301.mgcm3 == Code(
+            value="mg/cm3", scheme_designator="UCUM", meaning="mg/cm^3"
+        )
+
+    def test_cid402(self):
+        assert concepts.cid402.DestinationRoleID == Code(
+            value="110152",
+            scheme_designator="DCM",
+            meaning="Destination Role ID",
+        )
+
+    def test_cid405(self):
+        assert concepts.cid405.MultiMediaCard == Code(
+            value="110035", scheme_designator="DCM", meaning="Multi-media Card"
+        )
+
+    def test_cid610(self):
+        assert concepts.cid610.ReverseOsmosisPurifiedHclAcidifiedWater == Code(
+            value="127291",
+            scheme_designator="DCM",
+            meaning="Reverse osmosis purified, HCl acidified water",
+        )
+
+    def test_cid612(self):
+        assert concepts.cid612.MonitoredAnesthesiaCareMAC == Code(
+            value="398239001",
+            scheme_designator="SCT",
+            meaning="Monitored Anesthesia Care (MAC)",
+        )
+
+    def test_cid622(self):
+        assert concepts.cid622.NeuromuscularBlockingNMBNonDepolarizing == Code(
+            value="372790002",
+            scheme_designator="SCT",
+            meaning="NeuroMuscular Blocking (NMB) - non depolarizing",
+        )
+
+    def test_cid630(self):
+        assert concepts.cid630.LidocainePrilocaine == Code(
+            value="346553009",
+            scheme_designator="SCT",
+            meaning="Lidocaine + Prilocaine",
+        )
+
+    def test_cid643(self):
+        assert concepts.cid643._6Hydroxydopamine == Code(
+            value="4624",
+            scheme_designator="PUBCHEM_CID",
+            meaning="6-Hydroxydopamine",
+        )
+
+    def test_cid646(self):
+        assert concepts.cid646.SPECTCTOfWholeBody == Code(
+            value="127902",
+            scheme_designator="DCM",
+            meaning="SPECT CT of Whole Body",
+        )
+
+    def test_cid1003(self):
+        assert concepts.cid1003.LevelOfT11T12IntervertebralDisc == Code(
+            value="243918001",
+            scheme_designator="SCT",
+            meaning="Level of T11/T12 intervertebral disc",
+        )
+
+    def test_cid3000(self):
+        assert concepts.cid3000.OperatorNarrative == Code(
+            value="109111",
+            scheme_designator="DCM",
+            meaning="Operator's Narrative",
+        )
+
+    def test_cid3001_1(self):
+        assert concepts.cid3001.Avr == Code(
+            value="2:65", scheme_designator="MDC", meaning="-aVR"
+        )
+
+    def test_cid3001_2(self):
+        assert concepts.cid3001.NegativeLowRightScapulaLead == Code(
+            value="2:124",
+            scheme_designator="MDC",
+            meaning="negative: low right scapula Lead",
+        )
+
+    def test_cid3107(self):
+        assert concepts.cid3107._13Nitrogen == Code(
+            value="21576001", scheme_designator="SCT", meaning="^13^Nitrogen"
+        )
+
+    def test_cid3111(self):
+        assert concepts.cid3111.Tc99mTetrofosmin == Code(
+            value="404707004",
+            scheme_designator="SCT",
+            meaning="Tc-99m tetrofosmin",
+        )
+
+    def test_cid3263(self):
+        meaning = "12-lead from EASI leads (ES, AS, AI) by Dower/EASI transformation"
+        assert (
+            concepts.cid3263._12LeadFromEASILeadsESASAIByDowerEASITransformation
+            == Code(
+                value="10:11284",
+                scheme_designator="MDC",
+                meaning=meaning,
+            )
+        )
+
+    def test_cid3335(self):
+        assert concepts.cid3335.PWaveSecondDeflectionInPWave == Code(
+            value="10:320",
+            scheme_designator="MDC",
+            meaning="P' wave (second deflection in P wave)",
+        )
+
+    def test_contained(self):
+        c = Code("24028007", "SCT", "Right")
+        assert c in concepts.cid244
+
+    def test_not_contained(self):
+        c = Code("130290", "DCM", "Median")
+        assert c not in concepts.cid244
+
+    def test_dunder_dir(self):
+        d = concepts.UCUM
+        assert "ArbitraryUnit" in dir(d)
+        assert "Year" in dir(d)
+        assert "__delattr__" in dir(d)
+        assert "trait_names" in dir(d)
+        assert isinstance(dir(d), list)
+
+    def test_dir(self):
+        d = concepts.UCUM
+        assert isinstance(d.dir(), list)
+        assert "ArbitraryUnit" in d.dir()
+        assert "Year" in d.dir()
+        assert d.dir("xyz") == []
+        assert "Radian" in d.dir("ia")
+
+    def test_schemes(self):
+        schemes = concepts.schemes()
+        assert "UCUM" in schemes
+        assert "DCM" in schemes
+        assert "SCT" in schemes
+
+    def test_trait_names(self):
+        d = concepts.UCUM
+        assert "ArbitraryUnit" in d.trait_names()
+        assert "Year" in d.trait_names()
+        assert "__delattr__" in d.trait_names()
+        assert "trait_names" in d.trait_names()
+
+    def test_getattr_CID_with_scheme_raises(self):
+        msg = "Unknown code name 'cid2' for scheme 'UCUM'"
+        with pytest.raises(AttributeError, match=msg):
+            concepts.UCUM.cid2
+
+    def test_getattr_unknown_attr_raises(self):
+        msg = "Unknown code name 'bar' for scheme 'UCUM'"
+        with pytest.raises(AttributeError, match=msg):
+            concepts.UCUM.bar
+
+    def test_getattr_nonunique_attr_raises(self):
+        attr = "LeftVentricularInternalDiastolicDimensionBSA"
+        msg = f"Multiple code values for '{attr}' found: 80009-4, 80010-2"
+        with pytest.raises(RuntimeError, match=msg):
+            concepts.LN.LeftVentricularInternalDiastolicDimensionBSA

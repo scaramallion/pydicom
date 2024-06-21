@@ -1,4 +1,4 @@
-# Copyright 2008-2019 pydicom authors. See LICENSE file for details.
+# Copyright 2008-2024 pydicom authors. See LICENSE file for details.
 """Access code dictionary information"""
 
 from itertools import chain
@@ -9,10 +9,6 @@ from collections.abc import KeysView, Iterable
 from pydicom.sr.coding import Code
 from pydicom.sr._concepts_dict import concepts as CONCEPTS
 from pydicom.sr._cid_dict import name_for_cid, cid_concepts as CID_CONCEPTS
-
-
-# Reverse lookup for cid names
-cid_for_name = {v: k for k, v in name_for_cid.items()}
 
 
 def _filtered(source: Iterable[str], filters: Iterable[str]) -> list[str]:
@@ -326,7 +322,23 @@ class _CodesDict:
 
 
 class ConceptCollection:
+    """Interface for a collection of concepts, such as SNOMED-CT, or a DICOM CID.
+
+    .. versionadded:: 3.0
+    """
+    repr_format = "{} = {}"
+    str_format = "{:20} {:12} {:8} {}\n"
+
     def __init__(self, name) -> None:
+        """Create a new collection.
+
+        Parameters
+        ----------
+        name : str
+            The name of the collection, should either be a key in the
+            ``sr._concepts_dict.concepts`` :class:`dict` or a CID name for
+            a CID in ``sr._cid_dict.cid_concepts`` such as ``"CID1234"``.
+        """
         if not name.upper().startswith("CID"):
             self._name = name
             # dict[str, dict[str, tuple(str, list[int])]]
@@ -342,30 +354,29 @@ class ConceptCollection:
 
     @property
     def concepts(self) -> dict[str, Code]:
-        """Return a dict of {SR identifiers: codes}"""
+        """Return a :class:`dict` of {SR identifiers: codes}"""
         if not self._concepts:
             self._concepts = {name: getattr(self, name) for name in self.dir()}
 
         return self._concepts
 
     def __contains__(self, code: Code) -> bool:
-        """Checks whether a given code is a member of the context group.
+        """Checks whether a given code is a member of the collection.
 
         Parameters
         ----------
-        code: pydicom.sr.coding.Code | pydicom.sr.coding.CodedConcept
-            coded concept
+        code: pydicom.sr.coding.Code
+            The code to check for.
 
         Returns
         -------
         bool
-            whether CID contains `code`
+            Whether the collection contains the `code`
         """
-        #if self.name.startswith("CID"):
         return any([concept == code for concept in self.concepts.values()])
 
     def __dir__(self) -> list[str]:
-        """Gives a list of available SR identifiers.
+        """Return a list of available concept keywords.
 
         List of attributes is used, for example, in auto-completion in editors
         or command-line environments.
@@ -377,8 +388,7 @@ class ConceptCollection:
         return sorted(props | meths | sr_names)
 
     def dir(self, *filters: str) -> list[str]:
-        """Return an sorted list of SR identifiers based on a partial
-        match.
+        """Return an sorted list of concept keywords based on a partial match.
 
         Parameters
         ----------
@@ -389,7 +399,7 @@ class ConceptCollection:
         Returns
         -------
         list of str
-            The matching SR keywords. If no `filters` are used then all
+            The matching keywords. If no `filters` are used then all
             keywords are returned.
         """
         # CID_CONCEPTS: Dict[int, Dict[str, List[str]]]
@@ -471,15 +481,41 @@ class ConceptCollection:
 
     @property
     def is_cid(self) -> bool:
+        """Return ``True`` if the collection is one of the DICOM CIDs"""
         return self.name.startswith("CID")
 
     @property
     def name(self) -> str:
+        """Return the name of the collection."""
         return self._name
+
+    def __repr__(self) -> str:
+        """Return a representation of the collection."""
+        concepts = [
+            self.repr_format.format(name, concept)
+            for name, concept in self.concepts.items()
+        ]
+
+        return f"{self.name}\n" + "\n".join(concepts)
 
     @property
     def scheme_designator(self) -> str:
+        """Return the scheme designator for the collection."""
         return self.name
+
+    def __str__(self) -> str:
+        """Return a string representation of the collection."""
+        s = [self.name]
+        s.append(self.str_format.format("Attribute", "Code value", "Scheme", "Meaning"))
+        s.append(self.str_format.format("---------", "----------", "------", "-------"))
+        s.append(
+            "\n".join(
+                self.str_format.format(name, *concept)
+                for name, concept in self.concepts.items()
+            )
+        )
+
+        return "\n".join(s)
 
     def trait_names(self) -> list[str]:
         """Returns a list of valid names for auto-completion code.
@@ -489,26 +525,33 @@ class ConceptCollection:
         return dir(self)
 
 
-class Codes:
+class AvailableCollections:
+    """Managment class for the available concept collections.
+
+    .. versionadded:: 3.0
+    """
     def __init__(self, collections: list[ConceptCollection]) -> None:
+        """Create a new something.
+
+        Parameters
+        ----------
+        collections : list[ConceptCollection]
+            A list of the available concept collections.
+        """
         self._collections = {c.name: c for c in collections}
 
     @property
     def collections(self) -> ValuesView[str]:
+        """Return the names of the available concept collections."""
         return self._collections.values()
 
     def __getattr__(self, name: str) -> ConceptCollection:
-        """Return either a ``_CodesDict``, ``_CID_Dict`` or ``Code`` depending
-        on the `name`.
+        """Return the concept collection corresponding to `name`.
 
         Parameters
         ----------
         name : str
-
-        Returns
-        -------
-        pydicom.sr.Scheme
-
+            The scheme designator or CID name for the collection to be returned.
         """
         if name.upper().startswith("CID"):
             name = f"CID{name[3:]}"
@@ -516,9 +559,11 @@ class Codes:
         return self._collections[name]
 
     def schemes(self) -> list[str]:
+        """Return a list of available scheme designations."""
         return [c for c in self._collections.keys() if not c.startswith("CID")]
 
     def CIDs(self) -> list[str]:
+        """Return a list of available CID names."""
         return [c for c in self._collections.keys() if c.startswith("CID")]
 
 
@@ -543,12 +588,13 @@ SCHEMES = [
     # "I10",
 ]
 
+
 # Named concept collections like SNOMED-CT, etc
 _collections = [ConceptCollection(designator) for designator in SCHEMES]
 # DICOM CIDs
-_collections.extend(ConceptCollection(f"CID{cid}") for cid in name_for_cid.keys())
+_collections.extend(ConceptCollection(f"CID{cid}") for cid in name_for_cid)
 
-concepts = Codes(_collections)
+concepts = AvailableCollections(_collections)
 
 # -----
 

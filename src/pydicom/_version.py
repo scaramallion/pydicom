@@ -17,5 +17,7 @@ __dicom_version__: str = "2023e"
 
 
 # DICOM Standard version used for:
+#   sr/_cid_dict.py
+#   sr/_concepts_dict.py
 #   sr/_snomed_dict.py
-__snomed_dicom_version__: str = "2024c"
+__concepts_dicom_version__: str = "2024c"

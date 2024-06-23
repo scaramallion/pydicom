@@ -6,7 +6,13 @@ from pydicom.sr._cid_dict import (
 )
 from pydicom.sr._concepts_dict import concepts as CONCEPTS
 from pydicom.sr.coding import Code
-from pydicom.sr.codedict import codes, _CID_Dict, _CodesDict
+from pydicom.sr.codedict import (
+    codes,
+    _CID_Dict,
+    _CodesDict,
+    ConceptCollection,
+    AvailableCollections,
+)
 
 
 @pytest.fixture()
@@ -36,7 +42,7 @@ def add_nonunique_cid():
     CONCEPTS["TEST"] = {
         "Foo": {"BAR": ("Test A", [99999999999]), "BAZ": ("Test B", [99999999999])}
     }
-    CID_CONCEPTS[99999999999] = {"TEST": ["Foo", "Foo"]}
+    CID_CONCEPTS[99999999999] = {"TEST": ["Foo", "Foo"]}  # , "TEST2": ["Foo"]}
     name_for_cid[99999999999] = "Test"
     yield
     del CONCEPTS["TEST"]
@@ -412,3 +418,167 @@ class TestCIDDict:
         msg = f"Multiple schemes found for '{attr}' in CID 6129: SCT, FOO"
         with pytest.raises(AttributeError, match=msg):
             getattr(_CID_Dict(cid), attr)
+
+
+class TestConceptCollection:
+    """Tests for ConceptCollection"""
+
+    def test_init(self):
+        """Test creation of new collections"""
+        coll = ConceptCollection("SCT")
+        assert coll.name == "SCT"
+        assert coll.scheme_designator == "SCT"
+        assert coll.is_cid is False
+
+        coll = ConceptCollection("CID2")
+        assert coll.name == "CID2"
+        assert coll.scheme_designator == "CID2"
+        assert coll.is_cid is True
+
+    def test_concepts(self):
+        """Test ConceptCollection.concepts"""
+        coll = ConceptCollection("UCUM")
+        assert coll._concepts == {}
+        concepts = coll.concepts
+        assert coll._concepts != {}
+        assert concepts["Second"] == Code(
+            "s", scheme_designator="UCUM", meaning="second"
+        )
+
+        coll = ConceptCollection("CID2")
+        assert coll.concepts["Transverse"] == Code(
+            "62824007", scheme_designator="SCT", meaning="Transverse"
+        )
+
+    def test_contains(self):
+        """Test the in operator"""
+        coll = ConceptCollection("UCUM")
+        assert "Second" in coll
+        assert "Foo" not in coll
+
+        coll = ConceptCollection("CID2")
+        assert "Transverse" in coll
+        assert "Foo" not in coll
+
+    def test_dir(self):
+        """Test dir()"""
+        coll = ConceptCollection("UCUM")
+        assert "Second" in dir(coll)
+        assert "Foo" not in dir(coll)
+
+        coll = ConceptCollection("CID2")
+        assert "Transverse" in dir(coll)
+        assert "Foo" not in dir(coll)
+
+        # Check None_
+        coll = ConceptCollection("CID606")
+        assert "None_" in coll
+        assert "None_" in dir(coll)
+
+        # Check _125Iodine
+        coll = ConceptCollection("CID18")
+        assert "_125Iodine" in coll
+        assert "_125Iodine" in dir(coll)
+
+    def test_getattr(self):
+        """Test ConceptCollection.Foo"""
+        coll = ConceptCollection("UCUM")
+        assert coll.Second == Code("s", scheme_designator="UCUM", meaning="second")
+        msg = "No matching code for keyword 'Foo' in scheme 'UCUM'"
+        with pytest.raises(AttributeError, match=msg):
+            coll.Foo
+
+        coll = ConceptCollection("CID2")
+        assert coll.Transverse == Code(
+            "62824007", scheme_designator="SCT", meaning="Transverse"
+        )
+
+        msg = "No matching code for keyword 'Foo' in CID2"
+        with pytest.raises(AttributeError, match=msg):
+            coll.Foo
+
+        coll.foo = None
+        assert coll.foo is None
+
+    def test_getattr_multiple_raises(self, add_nonunique):
+        """Test non-unique results for the keyword"""
+        coll = ConceptCollection("TEST")
+        msg = "Multiple codes found for keyword 'Foo' in scheme 'TEST': BAR, BAZ"
+        with pytest.raises(RuntimeError, match=msg):
+            coll.Foo
+
+    def test_getattr_multiple_raises_cid(self, add_nonunique_cid):
+        """Test non-unique results for the keyword"""
+        coll = ConceptCollection("CID99999999999")
+        msg = "Multiple codes found for keyword 'Foo' in CID99999999999: BAR, BAZ"
+        with pytest.raises(RuntimeError, match=msg):
+            coll.Foo
+
+        coll._cid_data["TEST2"] = ["Foo"]
+        msg = (
+            "Multiple schemes found to contain the keyword 'Foo' in CID99999999999: "
+            "TEST, TEST2"
+        )
+        with pytest.raises(RuntimeError, match=msg):
+            coll.Foo
+
+    def test_repr(self):
+        """Test repr()"""
+        coll = ConceptCollection("UCUM")
+        assert (
+            "Second = Code(value='s', scheme_designator='UCUM', meaning='second', "
+            "scheme_version=None)"
+        ) in repr(coll)
+
+        coll = ConceptCollection("CID2")
+        assert (
+            "Transverse = Code(value='62824007', scheme_designator='SCT', "
+            "meaning='Transverse', scheme_version=None)"
+        ) in repr(coll)
+
+    def test_str(self):
+        """Test str()"""
+        coll = ConceptCollection("UCUM")
+        assert (
+            "Second                                                  s          "
+            "                  second\n"
+        ) in str(coll)
+
+        coll = ConceptCollection("CID2")
+        assert "Transverse       62824007    SCT      Transverse\n" in str(coll)
+
+    def test_trait_names(self):
+        """Test trait_names()"""
+        traits = ConceptCollection("UCUM").trait_names()
+        assert "Second" in traits
+        assert "Foo" not in traits
+
+        traits = ConceptCollection("CID2").trait_names()
+        assert "Transverse" in traits
+        assert "Foo" not in traits
+
+
+class TestAvailableCollections:
+    """Tests for AvailableCollections"""
+
+    def test_init(self):
+        """Test creating a new instance"""
+        colls = AvailableCollections(
+            [ConceptCollection("SCT"), ConceptCollection("CID2")]
+        )
+
+        assert list(colls.collections) == ["SCT", "CID2"]
+        assert colls.schemes() == ["SCT"]
+        assert colls.CIDs() == ["CID2"]
+
+    def test_getattr(self):
+        """Test AvailableCollections.Foo"""
+        colls = AvailableCollections(
+            [ConceptCollection("SCT"), ConceptCollection("CID2")]
+        )
+
+        assert isinstance(colls.SCT, ConceptCollection)
+        assert isinstance(colls.CID2, ConceptCollection)
+
+        colls.foo = None
+        assert colls.foo is None

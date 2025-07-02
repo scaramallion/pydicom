@@ -62,9 +62,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 DecodeFunction = Callable[[bytes, "DecodeRunner"], bytes | bytearray]
-ProcessingFunction = Callable[
-    ["np.ndarray", "DecodeRunner", dict[str, str | int]], "np.ndarray"
-]
+ProcessingFunction = Callable[["np.ndarray", "DecodeRunner"], "np.ndarray"]
 
 
 class DecodeOptions(RunnerOptions, total=False):
@@ -108,9 +106,7 @@ class DecodeOptions(RunnerOptions, total=False):
     gdcm_fix_big_endian: bool  # Apply fixes for GDCM on big endian systems
 
 
-def _process_color_space(
-    arr: "np.ndarray", runner: "DecodeRunner", changes: dict[str, str | int]
-) -> "np.ndarray":
+def _process_color_space(arr: "np.ndarray", runner: "DecodeRunner") -> "np.ndarray":
     """Convert `arr` to a given color space, typically RGB."""
     # If force_ybr then always do conversion (ignore as_rgb)
     force_ybr = runner.get_option("force_ybr", False)
@@ -140,7 +136,7 @@ def _process_color_space(
             PI.YBR_FULL,
             bit_depth=runner.bits_stored,
         )
-        changes["photometric_interpretation"] = PI.YBR_FULL
+        runner.set_option("photometric_interpretation", PI.YBR_FULL, index=runner.frame_index)
     elif to_rgb:
         arr = convert_color_space(
             arr,
@@ -148,7 +144,7 @@ def _process_color_space(
             PI.RGB,
             bit_depth=runner.bits_stored,
         )
-        changes["photometric_interpretation"] = PI.RGB
+        runner.set_option("photometric_interpretation", PI.RGB, index=runner.frame_index)
 
     return arr
 
@@ -297,7 +293,7 @@ class DecodeRunner(RunnerBase):
         # Check the component IDs for RGB or rgb (in ASCII)
         has_rgb_ids = info.get("component_ids", None) in ([82, 71, 66], [114, 103, 98])
         if has_rgb_ids and pi != PI.RGB:
-            self.set_option("photometric_interpretation", PI.RGB)
+            self.set_option("photometric_interpretation", PI.RGB, index=self.frame_index)
             warn_and_log(
                 f"The (0028,0004) 'Photometric Interpretation' value is '{pi}' "
                 "however the encoded image's codestream uses component IDs that "
@@ -312,7 +308,7 @@ class DecodeRunner(RunnerBase):
         )
         for marker in info.get("app", {}).values():
             if marker.startswith(b"JFIF") and "YBR" not in pi:
-                self.set_option("photometric_interpretation", cs)
+                self.set_option("photometric_interpretation", cs, index=self.frame_index)
                 warn_and_log(
                     "The (0028,0004) 'Photometric Interpretation' value is "
                     f"'{pi}' however the encoded image's codestream contains a "
@@ -517,15 +513,17 @@ class DecodeRunner(RunnerBase):
 
         return dtype
 
-    def pixel_properties(self, as_frame: bool = False) -> dict[str, str | int]:
+    # TODO: make it suitable for the frame at `index`
+    def pixel_properties(self, index: int | None = None) -> dict[str, str | int]:
         """Return a dict containing the :dcm:`Image Pixel
         <part03/sect_C.7.6.3.html>` module related properties.
 
         Parameters
         ----------
-        as_frame : bool, optional
-            If ``True`` then don't include properties that aren't appropriate
-            for a single frame. Default ``False``.
+        index : int | None, optional
+            If ``None`` then don't include properties that aren't appropriate
+            for a single frame such as, otherwise return the properties for the
+            frame at `index`. Default ``None``.
 
         Returns
         -------
@@ -533,7 +531,7 @@ class DecodeRunner(RunnerBase):
             A dict containing the values for:
 
             * `bits_allocated`
-            * `bits_stored`
+            * `bits_stored` (if the pixel keyword is ``"PixelData"``)
             * `columns`
             * `photometric_interpretation`
             * `samples_per_pixel`
@@ -541,49 +539,56 @@ class DecodeRunner(RunnerBase):
             * `number_of_frames`
             * `planar_configuration` (if `samples_per_pixel` > 1)
             * `pixel_representation` (if the pixel keyword is ``"PixelData"``)
-
-            The returned values depend on whether or not this method is
-            called before or after decoding the pixel data, as the decoding
-            plugins and image processing functions may update the values as
-            needed to reflect the corresponding decoded data. For example, if
-            the pixel data is converted from the YCbCr to RGB color space then
-            the `photometric_interpretation` value will be changed to match
-            after the data has been decoded.
         """
+        # If the property has a single value for all frames use it
+        # If the property has no values for all frames use the default
+        # If the property has multiple values for all frames then raise
+        #   unless `index` is not None
         d = {
-            "bits_allocated": self.bits_allocated,
-            "columns": self.columns,
-            "number_of_frames": self.number_of_frames if not as_frame else 1,
-            "photometric_interpretation": str(self.photometric_interpretation),
-            "rows": self.rows,
-            "samples_per_pixel": self.samples_per_pixel,
+            "number_of_frames": self.number_of_frames if index is None else 1,
         }
+        for name in _INDEXABLE_OPTS:
+            if (
+                name in ("bits_stored", "pixel_representation")
+                and self.pixel_keyword != "PixelData"
+            ):
+                continue
 
-        if self.samples_per_pixel > 1:
-            d["planar_configuration"] = self.planar_configuration
+            if name == "planar_configuration" and self.samples_per_pixel == 1:
+                continue
 
-        if self.pixel_keyword == "PixelData":
-            d["bits_stored"] = self.bits_stored
-            d["pixel_representation"] = self.pixel_representation
+            opt: list[str | int, dict[int, Any]] = self._opts[name]
+            values = opt[1][name]
+            if (nr_values := set(opt[1][name])) == 1:
+                d[name] = values[0]
+            elif nr_values == 0:
+                d[name] = opt[0]
+            elif index is not None:
+                d[name] = values[index]
+            else:
+                # TODO: Warn and set to None instead?
+                raise ValueError(
+                    f"Multiple values for '{name}' found during decoding: "
+                    f"{sorted(list(set(values)))}"
+                )
+
+        # Ensure 'photometric_interpretation' is a string instead of an enum
+        d["photometric_interpretation"] = str(d["photometric_interpretation"])
 
         return cast(dict[str, str | int], d)
 
-    def process(self, arr: "np.ndarray") -> tuple["np.ndarray", dict[str, str | int]]:
+    def process(self, arr: "np.ndarray") -> tuple["np.ndarray"]:
         """Return `arr` after applying zero or more processing operations.
 
         Returns
         -------
         numpy.ndarray
             The array with the applied processing.
-        dict[str, int | str]
-            A :class:`dict` containing any required changes to the image pixel
-            properties due to the processing.
         """
-        changes: dict[str, str | int] = {}
         for func in PROCESSORS:
-            arr = func(arr, self, changes)
+            arr = func(arr, self)
 
-        return arr, changes
+        return arr
 
     def reshape(self, arr: "np.ndarray", as_frame: bool = False) -> "np.ndarray":
         """Return a reshaped :class:`~numpy.ndarray` `arr`.
@@ -1029,16 +1034,17 @@ class Decoder(CoderBase):
         if not raw:
             # Processing may give us a new writeable array anyway, so do
             #   it first to avoid an unnecessary ndarray.copy()
-            arr, overrides = runner.process(arr)
+            arr = runner.process(arr)
 
         arr = arr.copy() if not arr.flags.writeable and as_writeable else arr
 
+        # FIXME: rationalise the planar_configuration
         # Multi-sample arrays are always returned *Planar Configuration* 0
         if runner.samples_per_pixel > 1:
-            overrides["planar_configuration"] = 0
+            runner.set_option("planar_configuration", 0, index=runner.frame_index)
 
-        pixel_properties = runner.pixel_properties(as_frame=as_frame)
-        pixel_properties.update(overrides)
+        # FIXME: rationalise
+        pixel_properties = runner.pixel_properties(index=as_frame)
 
         return arr, pixel_properties
 
@@ -1078,7 +1084,7 @@ class Decoder(CoderBase):
             # The decoding plugin may alter runner.bits_allocated to give a
             #   different dtype itemsize
             arr[:] = np.frombuffer(runner.decode(index=index), dtype=runner.pixel_dtype)
-            runner.set_option("bits_allocated", original_bits_allocated)
+            # runner.set_option("bits_allocated", original_bits_allocated)
 
             return arr
 
@@ -1113,7 +1119,7 @@ class Decoder(CoderBase):
                 )
                 arr = np.concatenate([arr, *excess])
 
-        runner.set_option("bits_allocated", original_bits_allocated)
+        # runner.set_option("bits_allocated", original_bits_allocated)
 
         return arr
 
@@ -1264,7 +1270,8 @@ class Decoder(CoderBase):
         out[1::6], out[4::6] = arr[2::4], arr[2::4]  # B
         out[2::6], out[5::6] = arr[3::4], arr[3::4]  # R
 
-        runner.set_option("photometric_interpretation", PI.YBR_FULL)
+        # FIXME
+        # runner.set_option("photometric_interpretation", PI.YBR_FULL)
 
         return out
 
@@ -1426,7 +1433,8 @@ class Decoder(CoderBase):
                 if len(frame) == runner.frame_length(unit="bytes"):
                     excess.append(frame)
                     runner.set_option("number_of_frames", runner.number_of_frames + 1)
-                    bits_allocated.append(runner.bits_allocated)
+                    # FIXME
+                    # bits_allocated.append(runner.bits_allocated)
 
             if excess:
                 warn_and_log(
@@ -1459,7 +1467,8 @@ class Decoder(CoderBase):
 
                     frames[idx] = out
 
-            runner.set_option("bits_allocated", target)
+            # FIXME
+            # runner.set_option("bits_allocated", target)
 
         return b"".join(b for b in frames)
 
@@ -1692,7 +1701,10 @@ class Decoder(CoderBase):
 
         log_warning = True
         if self.is_encapsulated and not indices:
-            for frame in runner.iter_decode():
+            # FIXME: rationalise
+            for idx, frame in enumerate(runner.iter_decode()):
+                runner._frame_index = idx
+
                 arr = np.frombuffer(frame, dtype=runner.pixel_dtype)
                 arr = runner.reshape(arr, as_frame=True)
                 if runner._test_for("sign_correction"):
@@ -1705,24 +1717,24 @@ class Decoder(CoderBase):
                 if not raw:
                     # Processing may give us a new writeable array anyway, so do
                     #   it first to avoid an unnecessary ndarray.copy()
-                    arr, overrides = runner.process(arr)
+                    arr = runner.process(arr)
 
                 arr = arr if arr.flags.writeable else arr.copy()
 
                 # Multi-sample arrays are always returned *Planar Configuration* 0
+                # FIXME
                 if runner.samples_per_pixel > 1:
-                    overrides["planar_configuration"] = 0
+                    runner.set_option("planar_configuration", 0, index=idx)
 
-                pixel_properties = runner.pixel_properties(as_frame=True)
-                pixel_properties.update(overrides)
-
-                yield arr, pixel_properties
+                yield arr, runner.pixel_properties(index=idx)
 
             return
 
         indices = indices if indices else range(runner.number_of_frames)
-        for index in indices:
-            arr = runner.reshape(func(runner, index), as_frame=True)
+        for idx in indices:
+            runner._frame_index = idx
+
+            arr = runner.reshape(func(runner, idx), as_frame=True)
             if runner._test_for("sign_correction"):
                 arr = _apply_sign_correction(arr, runner)
             elif runner._test_for("shift_correction"):
@@ -1731,17 +1743,15 @@ class Decoder(CoderBase):
 
             overrides = {}
             if not raw:
-                arr, overrides = runner.process(arr)
+                arr = runner.process(arr)
 
             arr = arr.copy() if not arr.flags.writeable and as_writeable else arr
 
+            # FIXME
             if runner.samples_per_pixel > 1:
-                overrides["planar_configuration"] = 0
+                runner.set_option("planar_configuration", 0, index=idx)
 
-            pixel_properties = runner.pixel_properties(as_frame=True)
-            pixel_properties.update(overrides)
-
-            yield arr, pixel_properties
+            yield arr, runner.pixel_properties(index=idx)
 
     def iter_buffer(
         self,
@@ -1837,8 +1847,8 @@ class Decoder(CoderBase):
             runner.validate()
 
         if self.is_encapsulated and not indices:
-            for buffer in runner.iter_decode():
-                yield buffer, runner.pixel_properties(as_frame=True)
+            for idx, buffer in enumerate(runner.iter_decode()):
+                yield buffer, runner.pixel_properties(index=idx)
 
             return
 
@@ -1848,8 +1858,8 @@ class Decoder(CoderBase):
             func = self._as_buffer_encapsulated
 
         indices = indices if indices else range(runner.number_of_frames)
-        for index in indices:
-            yield func(runner, index), runner.pixel_properties(as_frame=True)
+        for idx in indices:
+            yield func(runner, idx), runner.pixel_properties(index=idx)
 
 
 # Decoder names should be f"{UID.keyword}Decoder"

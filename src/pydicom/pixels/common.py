@@ -291,6 +291,18 @@ class PhotometricInterpretation(str, Enum):
         return str.__str__(self)
 
 
+_INDEXABLE_OPTS = (
+    "bits_allocated",
+    "bits_stored",
+    "columns",
+    "photometric_interpretation",
+    "pixel_representation",
+    "planar_configuration",
+    "rows",
+    "samples_per_pixel",
+)
+
+
 class RunnerBase:
     """Base class for the pixel data decoding/encoding process managers."""
 
@@ -312,11 +324,14 @@ class RunnerBase:
         # The source type, one of "Dataset", "Buffer", "Array" or "BinaryIO"
         self._src_type = "UNDEFINED"
 
+        # The index of the frame currently being decoded
+        self._frame_index = 0
+
     @property
     def bits_allocated(self) -> int:
         """Return the expected number of bits allocated used by the data."""
         if (value := self._opts.get("bits_allocated", None)) is not None:
-            return value
+            return value[0]
 
         raise AttributeError("No value for 'bits_allocated' has been set")
 
@@ -324,7 +339,7 @@ class RunnerBase:
     def bits_stored(self) -> int:
         """Return the expected number of bits stored used by the data."""
         if (value := self._opts.get("bits_stored", None)) is not None:
-            return value
+            return value[0]
 
         raise AttributeError("No value for 'bits_stored' has been set")
 
@@ -332,14 +347,39 @@ class RunnerBase:
     def columns(self) -> int:
         """Return the expected number of columns in the data."""
         if (value := self._opts.get("columns", None)) is not None:
-            return value
+            return value[0]
 
         raise AttributeError("No value for 'columns' has been set")
 
-    def del_option(self, name: str) -> None:
-        """Delete option `name` from the runner."""
+    @property
+    def frame_index(self) -> int:
+        """Return the index of the frame currently being decoded."""
+        return self._frame_index
+
+    def del_option(self, name: str, index: int | None = None) -> None:
+        """Delete option `name` from the runner.
+
+        ..versionchanged:: 3.1
+
+            Added the `index` optional argument.
+
+        Parameters
+        ----------
+        name : str
+            The name of the option to delete.
+        index : int | None, optional
+            If ``None`` (default) then delete the `name` option, otherwise
+            only delete the value for `name` for the frame at `index`. Only usable
+            with the following `name` values: ``'bits_allocated'``, ``'bits_stored'``,
+            ``'columns'``, ``'photometric_interpretation'``, ``'pixel_representation'``,
+            ``'planar_configuration'``, ``'rows'``, ``'samples_per_pixel'``.
+        """
         if name in self._undeletable:
             raise ValueError(f"Deleting '{name}' is not allowed")
+
+        if name in _INDEXABLE_OPTS:
+            if index is not None:
+                self.opts[name][1].pop(index, None)
 
         self._opts.pop(name, None)  # type: ignore[misc]
 
@@ -411,9 +451,38 @@ class RunnerBase:
 
         return length
 
-    def get_option(self, name: str, default: Any = None) -> Any:
-        """Return the value of the option `name`."""
-        return self._opts.get(name, default)
+    def get_option(
+        self, name: str, default: Any = None, index: int | None = None
+    ) -> Any:
+        """Return the value of the option `name`.
+
+        ..versionchanged:: 3.1
+
+            Added the `index` optional argument.
+
+        Parameters
+        ----------
+        name : str
+            The name of the option to return the value for.
+        default : Any, optional
+            The default value to return if no option `name` exists, (default ``None``).
+        index : int | None, optional
+            If ``None`` (default) then return the original value for `name`, otherwise
+            return the value for `name` for the frame at `index`. Only usable
+            with the following `name` values: ``'bits_allocated'``, ``'bits_stored'``,
+            ``'columns'``, ``'photometric_interpretation'``, ``'pixel_representation'``,
+            ``'planar_configuration'``, ``'rows'``, ``'samples_per_pixel'``.
+
+        Returns
+        -------
+        Any
+            The value for `name` or `default` if no option `name` exists.
+        """
+        opt = self._opts.get(name, default)
+        if name in self._opts and name in _INDEXABLE_OPTS:
+            return opt[0] if index is None else opt[1][index]
+
+        return opt
 
     @property
     def is_array(self) -> bool:
@@ -452,7 +521,7 @@ class RunnerBase:
     def photometric_interpretation(self) -> str:
         """Return the expected photometric interpretation of the data."""
         if (value := self._opts.get("photometric_interpretation", None)) is not None:
-            return value
+            return value[0]
 
         raise AttributeError("No value for 'photometric_interpretation' has been set")
 
@@ -474,7 +543,7 @@ class RunnerBase:
     def pixel_representation(self) -> int:
         """Return the expected pixel representation of the data."""
         if (value := self._opts.get("pixel_representation", None)) is not None:
-            return value
+            return value[0]
 
         raise AttributeError("No value for 'pixel_representation' has been set")
 
@@ -484,7 +553,7 @@ class RunnerBase:
         # Only required when number of samples is more than 1
         # Uncompressed may be either 0 or 1
         if (value := self._opts.get("planar_configuration", None)) is not None:
-            return value
+            return value[0]
 
         # Planar configuration is not relevant for compressed syntaxes
         if self.transfer_syntax.is_compressed:
@@ -496,7 +565,7 @@ class RunnerBase:
     def rows(self) -> int:
         """Return the expected number of rows in the data."""
         if (value := self._opts.get("rows", None)) is not None:
-            return value
+            return value[0]
 
         raise AttributeError("No value for 'rows' has been set")
 
@@ -504,12 +573,16 @@ class RunnerBase:
     def samples_per_pixel(self) -> int:
         """Return the expected number of samples per pixel in the data."""
         if (value := self._opts.get("samples_per_pixel", None)) is not None:
-            return value
+            return value[0]
 
         raise AttributeError("No value for 'samples_per_pixel' has been set")
 
-    def set_option(self, name: str, value: Any) -> None:
+    def set_option(self, name: str, value: Any, index: int | None = None) -> None:
         """Set a runner option.
+
+        ..versionchanged:: 3.1
+
+            Added the `index` optional argument.
 
         Parameters
         ----------
@@ -517,6 +590,12 @@ class RunnerBase:
             The name of the option to be set.
         value : Any
             The value of the option.
+        index : int | None, optional
+            If ``None`` (default) then set the original value for `name`, otherwise
+            set the value for `name` for the frame at `index`. Only usable
+            with the following `name` values: ``'bits_allocated'``, ``'bits_stored'``,
+            ``'columns'``, ``'photometric_interpretation'``, ``'pixel_representation'``,
+            ``'planar_configuration'``, ``'rows'``, ``'samples_per_pixel'``.
         """
         if name == "number_of_frames":
             value = int(value) if isinstance(value, str) else value
@@ -534,7 +613,15 @@ class RunnerBase:
             except KeyError:
                 pass
 
-        self._opts[name] = value  # type: ignore[literal-required]
+        if name in _INDEXABLE_OPTS:
+            opt = self._opts.setdefault(name, [None, {}])
+            if index is None:
+                self._opts[name][0] = value
+            else:
+                self._opts[name][1][index] = value
+
+        else:
+            self._opts[name] = value  # type: ignore[literal-required]
 
     def set_options(self, **kwargs: "DecodeOptions | EncodeOptions") -> None:
         """Set multiple runner options.

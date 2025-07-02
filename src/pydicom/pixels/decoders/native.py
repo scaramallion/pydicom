@@ -63,7 +63,7 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:
 
         # Update the runner options to ensure the reshaping is correct
         # Only do this if we successfully decoded the frame
-        runner.set_option("planar_configuration", 1)
+        runner.set_option("planar_configuration", 1, index=runner.frame_index)
 
         return frame
 

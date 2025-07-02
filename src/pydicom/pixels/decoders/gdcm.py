@@ -119,22 +119,22 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
 
     if tsyntax in uid.JPEGLSTransferSyntaxes:
         # GDCM always returns JPEG-LS data as color-by-pixel
-        runner.set_option("planar_configuration", 0)
+        runner.set_option("planar_configuration", 0, index=runner.frame_index)
         bits_stored = runner.get_option("jls_precision", bits_stored)
         if 0 < bits_stored <= 8:
-            runner.set_option("bits_allocated", 8)
+            runner.set_option("bits_allocated", 8, index=runner.frame_index)
         elif 8 < bits_stored <= 16:
-            runner.set_option("bits_allocated", 16)
+            runner.set_option("bits_allocated", 16, index=runner.frame_index)
 
     if tsyntax in uid.JPEG2000TransferSyntaxes:
         # GDCM pixel container size is based on precision
         bits_stored = runner.get_option("j2k_precision", bits_stored)
         if 0 < bits_stored <= 8:
-            runner.set_option("bits_allocated", 8)
+            runner.set_option("bits_allocated", 8, index=runner.frame_index)
         elif 8 < bits_stored <= 16:
-            runner.set_option("bits_allocated", 16)
+            runner.set_option("bits_allocated", 16, index=runner.frame_index)
         elif 16 < bits_stored <= 32:
-            runner.set_option("bits_allocated", 32)
+            runner.set_option("bits_allocated", 32, index=runner.frame_index)
 
     pixel_format = gdcm.PixelFormat(
         runner.samples_per_pixel,
@@ -162,10 +162,10 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
         frame = bytes(b)
 
     # GDCM returns YBR_ICT and YBR_RCT as RGB
-    if tsyntax in uid.JPEG2000TransferSyntaxes and photometric_interpretation in (
-        PI.YBR_ICT,
-        PI.YBR_RCT,
+    if (
+        tsyntax in uid.JPEG2000TransferSyntaxes
+        and photometric_interpretation in (PI.YBR_ICT, PI.YBR_RCT)
     ):
-        runner.set_option("photometric_interpretation", PI.RGB)
+        runner.set_option("photometric_interpretation", PI.RGB, index=runner.frame_index)
 
     return frame

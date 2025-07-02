@@ -126,7 +126,7 @@ class EncodeRunner(RunnerBase):
         Parameters
         ----------
         index : int | None
-            If the pixel data only has one from then use ``None``, otherwise
+            If the pixel data only has one frame then use ``None``, otherwise
             `index` is the index of the frame to be returned.
         """
         if self.is_array:

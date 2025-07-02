@@ -83,7 +83,7 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     precision = runner.get_option("j2k_precision", runner.bits_stored)
     # pillow's pixel container size is based on precision
     if 0 < precision <= 8:
-        runner.set_option("bits_allocated", 8)
+        runner.set_option("bits_allocated", 8, index=runner.frame_index)
     elif 8 < precision <= 16:
         # Pillow converts >= 9-bit RGB/YCbCr data to 8-bit
         if runner.samples_per_pixel > 1:
@@ -91,10 +91,10 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
                 f"Pillow cannot decode {precision}-bit multi-sample data correctly"
             )
 
-        runner.set_option("bits_allocated", 16)
+        runner.set_option("bits_allocated", 16, index=runner.frame_index)
     else:
         raise ValueError(
-            "only (0028,0101) 'Bits Stored' values of up to 16 are supported"
+            "Only (0028,0101) 'Bits Stored' values of up to 16 are supported"
         )
 
     # Pillow converts N-bit signed/unsigned data to 8- or 16-bit unsigned data
@@ -122,6 +122,6 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
 
     # pillow returns YBR_ICT and YBR_RCT as RGB
     if runner.photometric_interpretation in (PI.YBR_ICT, PI.YBR_RCT):
-        runner.set_option("photometric_interpretation", PI.RGB)
+        runner.set_option("photometric_interpretation", PI.RGB, index=runner.frame_index)
 
     return cast(bytes, arr.tobytes())

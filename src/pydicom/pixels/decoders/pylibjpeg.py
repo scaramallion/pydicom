@@ -85,31 +85,33 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:  # type: ignor
 
         # pylibjpeg-rle returns decoded data as planar configuration 1
         if tsyntax == uid.RLELossless:
-            runner.set_option("planar_configuration", 1)
+            runner.set_option("planar_configuration", 1, index=runner.index)
 
         if tsyntax in _OPENJPEG_SYNTAXES:
             # pylibjpeg-openjpeg returns YBR_ICT and YBR_RCT as RGB
             if runner.photometric_interpretation in (PI.YBR_ICT, PI.YBR_RCT):
-                runner.set_option("photometric_interpretation", PI.RGB)
+                runner.set_option(
+                    "photometric_interpretation", PI.RGB, index=runner.index
+                )
 
             # pylibjpeg-openjpeg pixel container size is based on J2K precision
             precision = runner.get_option("j2k_precision", runner.bits_stored)
             if 0 < precision <= 8:
-                runner.set_option("bits_allocated", 8)
+                runner.set_option("bits_allocated", 8, index=runner.index)
             elif 8 < precision <= 16:
-                runner.set_option("bits_allocated", 16)
+                runner.set_option("bits_allocated", 16, index=runner.index)
             elif 16 < precision <= 32:
-                runner.set_option("bits_allocated", 32)
+                runner.set_option("bits_allocated", 32, index=runner.index)
 
         if tsyntax in uid.JPEGLSTransferSyntaxes:
             # pylibjpeg-libjpeg always returns JPEG-LS data as color-by-pixel
-            runner.set_option("planar_configuration", 0)
+            runner.set_option("planar_configuration", 0, index=runner.index)
 
             # pylibjpeg-libjpeg pixel container size is based on JPEG-LS precision
             precision = runner.get_option("jls_precision", runner.bits_stored)
             if 0 < precision <= 8:
-                runner.set_option("bits_allocated", 8)
+                runner.set_option("bits_allocated", 8, index=runner.index)
             elif 8 < precision <= 16:
-                runner.set_option("bits_allocated", 16)
+                runner.set_option("bits_allocated", 16, index=runner.index)
 
         return frame

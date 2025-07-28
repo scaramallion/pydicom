@@ -72,7 +72,12 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
             #   don't want any color transformations.
             # Any color transformations would be inconsistent with the
             #   behavior required by the `raw` flag
-            if "adobe_transform" not in image.info:
+            if runner.get_option("as_rgb", False) or runner.get_option("raw", False):
+                # Default is to convert YCbCr to RGB, so let Pillow do that
+                runner.set_option(
+                    "photometric_interpretation", "RGB", index=runner.index
+                )
+            elif "adobe_transform" not in image.info:
                 image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
 
         return cast(bytes, image.tobytes())
@@ -83,7 +88,7 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     precision = runner.get_option("j2k_precision", runner.bits_stored)
     # pillow's pixel container size is based on precision
     if 0 < precision <= 8:
-        runner.set_option("bits_allocated", 8)
+        runner.set_option("bits_allocated", 8, index=runner.index)
     elif 8 < precision <= 16:
         # Pillow converts >= 9-bit RGB/YCbCr data to 8-bit
         if runner.samples_per_pixel > 1:
@@ -91,7 +96,7 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
                 f"Pillow cannot decode {precision}-bit multi-sample data correctly"
             )
 
-        runner.set_option("bits_allocated", 16)
+        runner.set_option("bits_allocated", 16, index=runner.index)
     else:
         raise ValueError(
             "only (0028,0101) 'Bits Stored' values of up to 16 are supported"
@@ -122,6 +127,6 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
 
     # pillow returns YBR_ICT and YBR_RCT as RGB
     if runner.photometric_interpretation in (PI.YBR_ICT, PI.YBR_RCT):
-        runner.set_option("photometric_interpretation", PI.RGB)
+        runner.set_option("photometric_interpretation", PI.RGB, index=runner.index)
 
     return cast(bytes, arr.tobytes())

@@ -1,11 +1,26 @@
 3.1.0
 =====
 
+.. currentmodule:: pydicom.pixels.decoders.base
+
 Changes
 -------
 
 * DICOM dictionary updated to 2024d.
 * Prefer using pylibjpeg over GDCM when encoding *RLE Lossless*.
+* The following changes have been made to :class:`~DecodeRunner` as part of improving
+  the logic for decoding plugins communicating frame-level property changes:
+
+  * Added the :attr:`DecodeRunner.index<DecodeRunner.index>` property
+  * Removed the `as_frame` parameter from :meth:`~DecodeRunner.pixel_properties`
+    and :meth:`~DecodeRunner.reshape`.
+  * Added an `index` parameter to :meth:`~DecodeRunner.frame_length`,
+    :meth:`~DecodeRunner.get_option`, :meth:`~DecodeRunner.set_option`,
+    :meth:`~DecodeRunner.pixel_properties`, :meth:`~DecodeRunner.process`,
+    :meth:`~DecodeRunner.reshape` and :meth:`~DecodeRunner.set_option`.
+  * The :meth:`~DecodeRunner.pixel_dtype` property has been changed to a class method.
+
+.. currentmodule:: pydicom
 
 Fixes
 -----
@@ -45,10 +60,10 @@ Enhancements
 * Updated UIDs to version 2024d of the DICOM Standard
 * The following UID constants have been added:
 
-    * :attr:`~pydicom.uid.JPEGXLLossless`
-    * :attr:`~pydicom.uid.JPEGXLJPEGRecompression`
-    * :attr:`~pydicom.uid.JPEGXL`
-    * :attr:`~pydicom.uid.DeflatedImageFrameCompression`
+  * :attr:`~pydicom.uid.JPEGXLLossless`
+  * :attr:`~pydicom.uid.JPEGXLJPEGRecompression`
+  * :attr:`~pydicom.uid.JPEGXL`
+  * :attr:`~pydicom.uid.DeflatedImageFrameCompression`
 * Added ability to specify tag numbers in the CLI commands (allows private tags to be specified)
 * Removed `exec` and `eval` from tests, CLI, and scripts for improved security (:issue:`2193`)
 * Added support for up to 16-bit input images to :func:`~pydicom.pixels.convert_color_space`

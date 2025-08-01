@@ -15,6 +15,9 @@ from pydicom.pixels.decoders.base import DecodeRunner
 
 try:
     from PIL import Image, features
+
+    _HAVE_LIBJPEG = "libjpeg" in features.get_supported_features()
+    _HAVE_LIBJPEG_TURBO = "libjpeg_turbo" in features.get_supported_features()
 except ImportError:
     pass
 
@@ -34,7 +37,17 @@ DECODER_DEPENDENCIES = {
 }
 
 _LIBJPEG_SYNTAXES = [uid.JPEGBaseline8Bit, uid.JPEGExtended12Bit]
+_LIBJPEG_TURBO_SYNTAXES = [
+    uid.JPEGBaseline8Bit,
+    uid.JPEGExtended12Bit,
+    uid.JPEGExtended12Bit,
+]
 _OPENJPEG_SYNTAXES = [uid.JPEG2000Lossless, uid.JPEG2000]
+
+try:
+    _JPEGExtended12BitSupport = features.version_feature("libjpeg_turbo").split(".") > ("3", "1")
+except ValueError:
+    _JPEGExtended12BitSupport = False
 
 
 def is_available(uid: str) -> bool:
@@ -44,8 +57,11 @@ def is_available(uid: str) -> bool:
     if not _passes_version_check("PIL", (10, 3)):
         return False
 
-    if uid in _LIBJPEG_SYNTAXES:
-        return bool(features.check_codec("jpg"))  # type: ignore[no-untyped-call]
+    if _HAVE_LIBJPEG:
+        return uid in _LIBJPEG_SYNTAXES:
+
+    elif _HAVE_LIBJPEG_TURBO:
+        return uid in _LIBJPEG_TURBO_SYNTAXES:
 
     if uid in _OPENJPEG_SYNTAXES:
         return bool(features.check_codec("jpg_2000")) and HAVE_NP  # type: ignore[no-untyped-call]
@@ -56,12 +72,14 @@ def is_available(uid: str) -> bool:
 def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     """Return the decoded image data in `src` as a :class:`bytes`."""
     tsyntax = runner.transfer_syntax
-    original_bits_allocated = runner.bits_allocated
+    bits_allocated = runner.bits_allocated
 
     # libjpeg only supports 8-bit JPEG Extended (can be 8 or 12 in the JPEG standard)
-    if tsyntax == uid.JPEGExtended12Bit and runner.bits_stored != 8:
+    # libjpeg-turbo supports up to
+    if not _JPEGExtended12BitSupport:
         raise NotImplementedError(
-            "Pillow does not support 'JPEG Extended' for samples with 12-bit precision"
+            "Pillow requires libjpeg-turbo v3.1 or higher to decode 'JPEG Extended' "
+            "for samples with 12-bit precision"
         )
 
     image = Image.open(BytesIO(src), formats=("JPEG", "JPEG2000"))
@@ -73,18 +91,34 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
             #   don't want any color transformations.
             # Any color transformations would be inconsistent with the
             #   behavior required by the `raw` flag
-            if "adobe_transform" not in image.info:
-                image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
+            # If raw is True or as_rgb is False then return YCbCr
+            # Otherwise return RGB
+            if runner.get_option("raw", False) or runner.get_option("as_rgb", True):
+                if "adobe_transform" not in image.info:
+                    image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
+                else:
+                    # What does Pillow do if the Adobe APP14 marker is present?
+                    # APP14 format is:
+                    # Adobe\x00 | 2 bytes length | 1 | 1 | 1 | ColorTransform
+                    # 0: Unknown (RGB or CMYK) (CMYK not relevant, so RGB)
+                    # 1: YCbCr
+                    # 2: YCCK (not relevant)
+                    pass
+            else:
+                image.draft("RGB", image.size)  # type: ignore[no-untyped-call]
+                runner.set_frame_option(runner.index, "photometric_interpretation", PI.RGB)
+
+        runner.set_frame_option(runner.index, "plugin", "pillow")
 
         return cast(bytes, image.tobytes())
 
     # JPEG 2000
     # The precision from the J2K codestream is more appropriate because the
     #   decoder will use it to create the output integers
-    precision = runner.get_option("j2k_precision", runner.bits_stored)
+    precision = runner.get_frame_option(runner.index, "j2k_precision", runner.bits_stored)
     # pillow's pixel container size is based on precision
     if 0 < precision <= 8:
-        runner.set_option("bits_allocated", 8)
+        bits_allocated = 8
     elif 8 < precision <= 16:
         # Pillow converts >= 9-bit RGB/YCbCr data to 8-bit
         if runner.samples_per_pixel > 1:
@@ -92,22 +126,24 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
                 f"Pillow cannot decode {precision}-bit multi-sample data correctly"
             )
 
-        runner.set_option("bits_allocated", 16)
+        bits_allocated = 16
     else:
         raise ValueError(
             "only (0028,0101) 'Bits Stored' values of up to 16 are supported"
         )
 
+    runner.set_frame_option(runner.index, "bits_allocated", bits_allocated)
+
     # Pillow converts N-bit signed/unsigned data to 8- or 16-bit unsigned data
     #   See Pillow src/libImaging/Jpeg2KDecode.c::j2ku_gray_i
     buffer = bytearray(image.tobytes())  # so the array is writeable
     del image
-    dtype = runner.pixel_dtype
+    dtype = runner.frame_dtype(runner.index)
     arr = np.frombuffer(buffer, dtype=f"<u{dtype.itemsize}")
 
     is_signed = runner.pixel_representation
     if runner.get_option("apply_j2k_sign_correction", False):
-        is_signed = runner.get_option("j2k_is_signed", is_signed)
+        is_signed = runner.get_frame_option(runner.index, "j2k_is_signed", is_signed)
 
     if is_signed and runner.pixel_representation == 1:
         # Re-view the unsigned integers as signed
@@ -123,10 +159,12 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
 
     # pillow returns YBR_ICT and YBR_RCT as RGB
     if runner.photometric_interpretation in (PI.YBR_ICT, PI.YBR_RCT):
-        runner.set_option("photometric_interpretation", PI.RGB)
+        runner.set_frame_option(runner.index, "photometric_interpretation", PI.RGB)
 
     # Signal that single-bit data is represented in unpacked form
-    if original_bits_allocated == 1:
-        runner.set_option("is_bitpacked", False)
+    if runner.bits_allocated == 1:
+        runner.set_frame_option(runner.index, "is_bitpacked", False)
+
+    runner.set_frame_option(runner.index, "plugin", "pillow")
 
     return cast(bytes, arr.tobytes())

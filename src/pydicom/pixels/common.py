@@ -265,6 +265,30 @@ class CoderBase:
         )
 
 
+class FrameOptions(TypedDict, total=False):
+    """Options accepted by RunnerBase.set_frame_option()"""
+
+    ## Pixel data description options
+    bits_allocated: int
+    bits_stored: int
+    columns: int
+    photometric_interpretation: str
+    pixel_representation: int
+    rows: int
+    samples_per_pixel: int
+    planar_configuration: int
+
+    # Whether or not single bit data (with Bits Allocated = 1) is passed
+    # to/from encoder/decoder functions in a bit-packed format (if True) or
+    # unpacked format (if False). The unpacked stores each pixel in a uint8
+    # with value 0 or 1. Ignored if BitsAllocated > 1.
+    is_bitpacked: bool
+
+    jls_precision: int
+    j2k_precision: int
+    j2k_is_signed: bool
+
+
 # TODO: Python 3.11 switch to StrEnum
 @unique
 class PhotometricInterpretation(str, Enum):
@@ -306,11 +330,16 @@ class RunnerBase:
         # Runner options
         self._opts: DecodeOptions | EncodeOptions = {}
         self.set_option("transfer_syntax_uid", tsyntax)
+        # Frame options
+        self._frame_opts: dict[int, dict[str, Any]] = {}
         # Runner options that cannot be deleted, only modified
         self._undeletable: tuple[str, ...] = ("transfer_syntax_uid",)
 
         # The source type, one of "Dataset", "Buffer", "Array" or "BinaryIO"
         self._src_type = "UNDEFINED"
+
+        # The frame currently being encoded/decoded - not used for native encoding
+        self._index: int
 
     @property
     def bits_allocated(self) -> int:
@@ -377,7 +406,7 @@ class RunnerBase:
             The expected length of a single frame of pixel data in either whole
             bytes or pixels, excluding the NULL trailing padding byte for odd
             length data. For "pixels", an integer will always be returned. For
-            "bytes", a float will be returned for images with BitsAllocated of
+            "bytes", a float will be returned for images with *Bits Allocated* of
             1 whose frames do not consist of a whole number of bytes.
         """
         length: int | float = self.rows * self.columns * self.samples_per_pixel
@@ -411,9 +440,52 @@ class RunnerBase:
 
         return length
 
+    def get_frame_option(self, index: int | None, name: str, default: Any = None) -> set[Any] | Any:
+        """Return the value of the option `name` for frame `index`.
+
+        .. versionadded:: 3.1
+
+        Parameters
+        ----------
+        index : int | None
+            The index of the frame to get the option for. If ``None`` then return a
+            set containing the unique values for all frames.
+        name : str
+            The name of the option to get.
+        default : Any, optional
+            The value to return if either `index` or `name` is not found.
+
+        Returns
+        -------
+        Any | set[Any]
+            If `index` is ``None`` then returns a set containing the unique values,
+            or the `default` if no frame option called `name` have been set. Otherwise
+            returns the value for the frame at `index` or the `default` if either no
+            frame at `index` exists or it has no frame options called `name`.
+
+        """
+        if index is None:
+            values = set([v[name] for v in self._frame_opts.values()])
+            if values:
+                return values
+
+            return default
+
+        if index in self._frame_opts:
+            return self._frame_opts[index].get(name, default)
+
+        return default
+
     def get_option(self, name: str, default: Any = None) -> Any:
         """Return the value of the option `name`."""
         return self._opts.get(name, default)
+
+    @property
+    def index(self) -> int:
+        if hasattr(self, "_index"):
+            return self._index
+
+        raise ValueError("The frame 'index' is not available")
 
     @property
     def is_array(self) -> bool:
@@ -507,6 +579,56 @@ class RunnerBase:
             return value
 
         raise AttributeError("No value for 'samples_per_pixel' has been set")
+
+    def set_frame_option(self, index: int | None, name: str, value: Any) -> None:
+        """Set an option for the encapsulated frame at `index`.
+
+        .. versionadded:: 3.1
+
+        Parameters
+        ----------
+        index : int | None
+            The index of the frame to set the option for, if ``None`` then set the
+            value for all frames.
+        name : str
+            The name of the option to be set. Only the following are currently
+            supported: ``'is_bitpacked'``, ``'bits_allocated'``,
+            ``'planar_configuration'`` and ``'photometric_interpretation'``.
+        value : Any
+            The value of the option.
+        """
+        if name == "bits_allocated" and (value != 1 or value % 8 != 0):
+            raise ValueError(
+                f"Invalid 'bits_allocated' value '{value}' for frame {index}, must "
+                "be 1 or a multiple of 8"
+            )
+
+        if name == "is_bitpacked" and not isinstance(value, bool):
+            raise ValueError(
+                f"Invalid 'is_bitpacked' value '{value}' for frame {index}, must be "
+                "a boolean"
+            )
+
+        if name == "planar_configuration" and value not in (0, 1):
+            raise ValueError(
+                f"Invalid 'planar_configuration' value '{value}' for frame {index}, "
+                "must be 0 or 1"
+            )
+
+        if name == "photometric_interpretation":
+            if value == "PALETTE COLOR":
+                value = PhotometricInterpretation.PALETTE_COLOR
+            try:
+                value = PhotometricInterpretation[value]
+            except KeyError:
+                pass
+
+        if index is not None:
+            opts = self._frame_opts.setdefault(index, {})
+            opts[name] = value
+        else:
+            for opts in self._frame_opts.values():
+                opts[name] = value
 
     def set_option(self, name: str, value: Any) -> None:
         """Set a runner option.
@@ -667,12 +789,11 @@ class RunnerBase:
 
 
 class RunnerOptions(TypedDict, total=False):
-    """Options accepted by RunnerBase"""
+    """Options accepted by RunnerBase.set_option()"""
 
     ## Pixel data description options
     # Required
     bits_allocated: int
-    bits_stored: int
     columns: int
     number_of_frames: int
     photometric_interpretation: str
@@ -681,6 +802,9 @@ class RunnerOptions(TypedDict, total=False):
     rows: int
     samples_per_pixel: int
     transfer_syntax_uid: UID
+
+    # Conditionall required if pixel_keyword is PixelData
+    bits_stored: int
 
     # Conditionally required if samples_per_pixel > 1
     planar_configuration: int
@@ -693,4 +817,4 @@ class RunnerOptions(TypedDict, total=False):
     # to/from encoder/decoder functions in a bit-packed format (if True) or
     # unpacked format (if False). The unpacked stores each pixel in a uint8
     # with value 0 or 1. Ignored if BitsAllocated > 1.
-    is_bitpacked: bool
+    # is_bitpacked: bool

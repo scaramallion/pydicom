@@ -440,7 +440,9 @@ class RunnerBase:
 
         return length
 
-    def get_frame_option(self, index: int | None, name: str, default: Any = None) -> set[Any] | Any:
+    def get_frame_option(
+        self, index: int | None, name: str, default: Any = None
+    ) -> set[Any] | Any:
         """Return the value of the option `name` for frame `index`.
 
         .. versionadded:: 3.1
@@ -506,6 +508,16 @@ class RunnerBase:
     def is_dataset(self) -> bool:
         """Return ``True`` if the pixel data source is a :class:`~pydicom.dataset.Dataset`"""
         return self._src_type == "Dataset"
+
+    @property
+    def is_encapsulated(self) -> bool:
+        """Return ``True`` if the corresponding *Transfer Syntax UID* uses an encapsulated encoding."""
+        return self.transfer_syntax.is_encapsulated
+
+    @property
+    def is_native(self) -> bool:
+        """Return ``True`` if the corresponding *Transfer Syntax UID* uses native encoding."""
+        return not self.transfer_syntax.is_encapsulated
 
     @property
     def number_of_frames(self) -> int:

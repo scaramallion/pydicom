@@ -85,12 +85,12 @@ class TestLibJpegDecoder:
             assert arr.flags.writeable
 
     def test_rgb_component_ids(self):
-        """Test decoding an incorrect photometric interpretation using cIDs."""
+        """Test decoding an incorrect photometric interpretation using CIDs."""
         decoder = get_decoder(JPEGBaseline8Bit)
         reference = JPGB_08_08_3_0_1F_RGB
         msg = (
             r"The \(0028,0004\) 'Photometric Interpretation' value is "
-            "'YBR_FULL_422' however the encoded image's codestream uses "
+            "'YBR_FULL_422' however the encoded image codestream for frame 0 uses "
             "component IDs that indicate it should be 'RGB'"
         )
         ds = dcmread(reference.path)
@@ -110,8 +110,8 @@ class TestLibJpegDecoder:
         reference = JPGB_08_08_3_0_1F_YBR_FULL
         msg = (
             r"The \(0028,0004\) 'Photometric Interpretation' value is "
-            "'RGB' however the encoded image's codestream contains a JFIF APP "
-            "marker which indicates it should be 'YBR_FULL_422'"
+            "'RGB' however the encoded image codestream for frame 0 contains a JFIF "
+            "APP marker which indicates it should be 'YBR_FULL_422'"
         )
         ds = dcmread(reference.path)
         ds.PhotometricInterpretation = "RGB"

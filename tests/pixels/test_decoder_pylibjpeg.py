@@ -180,8 +180,8 @@ class TestLibJpegDecoder:
         arr = arr.reshape((ds.Rows, ds.Columns))
         JLSN_08_01_1_0_1F.test(arr)
         assert arr.shape == JLSN_08_01_1_0_1F.shape
-        assert meta["bits_allocated"] == 8
-        assert meta["bits_stored"] == 8
+        assert meta[0]["bits_allocated"] == 8
+        assert meta[0]["bits_stored"] == 8
 
     def test_rgb_component_ids(self):
         """Test decoding an incorrect photometric interpretation using cIDs."""
@@ -189,7 +189,7 @@ class TestLibJpegDecoder:
         reference = JPGB_08_08_3_0_1F_RGB
         msg = (
             r"The \(0028,0004\) 'Photometric Interpretation' value is "
-            "'YBR_FULL_422' however the encoded image's codestream uses "
+            "'YBR_FULL_422' however the encoded image codestream for frame 0 uses "
             "component IDs that indicate it should be 'RGB'"
         )
         ds = dcmread(reference.path)
@@ -209,8 +209,8 @@ class TestLibJpegDecoder:
         reference = JPGB_08_08_3_0_1F_YBR_FULL
         msg = (
             r"The \(0028,0004\) 'Photometric Interpretation' value is "
-            "'RGB' however the encoded image's codestream contains a JFIF APP "
-            "marker which indicates it should be 'YBR_FULL_422'"
+            "'RGB' however the encoded image codestream for frame 0 contains a JFIF "
+            "APP marker which indicates it should be 'YBR_FULL_422'"
         )
         ds = dcmread(reference.path)
         ds.PhotometricInterpretation = "RGB"
@@ -238,7 +238,7 @@ class TestLibJpegDecoder:
 
         decoder = get_decoder(JPEGLSLossless)
         buffer, meta = decoder.as_buffer(ds, decoding_plugin="pylibjpeg")
-        assert meta["bits_allocated"] == 16
+        assert meta[0]["bits_allocated"] == 16
         arr = np.frombuffer(buffer, dtype="<u2")
         arr = arr.reshape(2, ds.Rows, ds.Columns)
         JLSL_08_07_1_0_1F.test(arr[0], plugin="pylibjpeg")
@@ -399,8 +399,9 @@ class TestRleDecoder:
         buffer, meta = decoder.as_buffer(
             reference.ds, raw=True, decoding_plugin="pylibjpeg"
         )
-        if meta["samples_per_pixel"] > 1:
-            assert meta["planar_configuration"] == 1
+        for idx in meta:
+            if meta[idx]["samples_per_pixel"] > 1:
+                assert meta[idx]["planar_configuration"] == 1
 
     def test_singlebit_raises(self):
         """Currently single bit is not supported, check error raised."""
@@ -409,8 +410,8 @@ class TestRleDecoder:
         msg = (
             "Unable to decode as exceptions were raised by all "
             "available plugins:\n  pylibjpeg: pylibjpeg cannot "
-            "decompress RLE Lossless encoded data with bits "
-            "allocated = 1."
+            r"decompress RLE Lossless encoded data with \(0028,0100\) 'Bits "
+            "Allocated' = 1"
         )
         with pytest.raises(RuntimeError, match=msg):
             decoder.as_array(reference.ds, decoding_plugin="pylibjpeg")

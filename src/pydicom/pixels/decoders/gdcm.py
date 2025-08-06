@@ -176,6 +176,6 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     if runner.bits_allocated == 1:
         runner.set_frame_option(runner.index, "is_bitpacked", False)
 
-    runner.set_frame_option(runner.index, "plugin", "gdcm")
+    runner.set_frame_option(runner.index, "decoding_plugin", "gdcm")
 
     return frame

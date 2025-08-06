@@ -44,6 +44,6 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:
     elif 8 < precision <= 16:
         runner.set_frame_option(runner.index, "bits_allocated", 16)
 
-    runner.set_frame_option(runner.index, "plugin", "pyjpegls")
+    runner.set_frame_option(runner.index, "decoding_plugin", "pyjpegls")
 
     return cast(bytearray, buffer)

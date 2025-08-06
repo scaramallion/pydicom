@@ -270,12 +270,7 @@ class FrameOptions(TypedDict, total=False):
 
     ## Pixel data description options
     bits_allocated: int
-    bits_stored: int
-    columns: int
     photometric_interpretation: str
-    pixel_representation: int
-    rows: int
-    samples_per_pixel: int
     planar_configuration: int
 
     # Whether or not single bit data (with Bits Allocated = 1) is passed
@@ -287,6 +282,9 @@ class FrameOptions(TypedDict, total=False):
     jls_precision: int
     j2k_precision: int
     j2k_is_signed: bool
+
+    # The plugin used to decode the frame
+    decoding_plugin: str
 
 
 # TODO: Python 3.11 switch to StrEnum
@@ -331,7 +329,7 @@ class RunnerBase:
         self._opts: DecodeOptions | EncodeOptions = {}
         self.set_option("transfer_syntax_uid", tsyntax)
         # Frame options
-        self._frame_opts: dict[int, dict[str, Any]] = {}
+        self._frame_meta: dict[int, dict[str, Any]] = {}
         # Runner options that cannot be deleted, only modified
         self._undeletable: tuple[str, ...] = ("transfer_syntax_uid",)
 
@@ -440,18 +438,15 @@ class RunnerBase:
 
         return length
 
-    def get_frame_option(
-        self, index: int | None, name: str, default: Any = None
-    ) -> set[Any] | Any:
+    def get_frame_option(self, index: int, name: str, default: Any = None) -> Any:
         """Return the value of the option `name` for frame `index`.
 
         .. versionadded:: 3.1
 
         Parameters
         ----------
-        index : int | None
-            The index of the frame to get the option for. If ``None`` then return a
-            set containing the unique values for all frames.
+        index : int
+            The index of the frame to get the option for.
         name : str
             The name of the option to get.
         default : Any, optional
@@ -459,24 +454,18 @@ class RunnerBase:
 
         Returns
         -------
-        Any | set[Any]
-            If `index` is ``None`` then returns a set containing the unique values,
-            or the `default` if no frame option called `name` have been set. Otherwise
-            returns the value for the frame at `index` or the `default` if either no
-            frame at `index` exists or it has no frame options called `name`.
+        Any
+            Returns the value for the frame at `index` or the `default`.
 
+        Raises
+        ------
+        KeyError
+            If no frame at `index` exists.
         """
-        if index is None:
-            values = set([v[name] for v in self._frame_opts.values()])
-            if values:
-                return values
-
+        if index not in self._frame_meta:
             return default
 
-        if index in self._frame_opts:
-            return self._frame_opts[index].get(name, default)
-
-        return default
+        return self._frame_meta[index].get(name, default)
 
     def get_option(self, name: str, default: Any = None) -> Any:
         """Return the value of the option `name`."""
@@ -484,6 +473,9 @@ class RunnerBase:
 
     @property
     def index(self) -> int:
+        """Return the index of the frame currently being encoded or decoded. Only
+        available for encapsulated transfer syntaxes.
+        """
         if hasattr(self, "_index"):
             return self._index
 
@@ -592,24 +584,21 @@ class RunnerBase:
 
         raise AttributeError("No value for 'samples_per_pixel' has been set")
 
-    def set_frame_option(self, index: int | None, name: str, value: Any) -> None:
-        """Set an option for the encapsulated frame at `index`.
+    def set_frame_option(self, index: int, name: str, value: Any) -> None:
+        """Set an option for the frame at `index`.
 
         .. versionadded:: 3.1
 
         Parameters
         ----------
         index : int | None
-            The index of the frame to set the option for, if ``None`` then set the
-            value for all frames.
+            The index of the frame to set the option for.
         name : str
-            The name of the option to be set. Only the following are currently
-            supported: ``'is_bitpacked'``, ``'bits_allocated'``,
-            ``'planar_configuration'`` and ``'photometric_interpretation'``.
+            The name of the option to set.
         value : Any
             The value of the option.
         """
-        if name == "bits_allocated" and (value != 1 or value % 8 != 0):
+        if name == "bits_allocated" and value != 1 and value % 8 != 0:
             raise ValueError(
                 f"Invalid 'bits_allocated' value '{value}' for frame {index}, must "
                 "be 1 or a multiple of 8"
@@ -635,12 +624,8 @@ class RunnerBase:
             except KeyError:
                 pass
 
-        if index is not None:
-            opts = self._frame_opts.setdefault(index, {})
-            opts[name] = value
-        else:
-            for opts in self._frame_opts.values():
-                opts[name] = value
+        opts = self._frame_meta.setdefault(index, {})
+        opts[name] = value
 
     def set_option(self, name: str, value: Any) -> None:
         """Set a runner option.

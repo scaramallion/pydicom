@@ -193,7 +193,7 @@ class TestDecoding:
         arr = arr.reshape((ds.Rows, ds.Columns))
         JLSN_08_01_1_0_1F.test(arr)
         assert arr.shape == JLSN_08_01_1_0_1F.shape
-        assert meta["bits_allocated"] == 8
+        assert meta[0]["bits_allocated"] == 8
 
     def test_jls_lossy_signed_raises(self):
         """Test decoding JPEG-LS signed with < 8-bits raises."""
@@ -220,7 +220,7 @@ class TestDecoding:
         reference = JPGB_08_08_3_0_1F_RGB
         msg = (
             r"The \(0028,0004\) 'Photometric Interpretation' value is "
-            "'YBR_FULL_422' however the encoded image's codestream uses "
+            "'YBR_FULL_422' however the encoded image codestream for frame 0 uses "
             "component IDs that indicate it should be 'RGB'"
         )
         ds = dcmread(reference.path)
@@ -240,8 +240,8 @@ class TestDecoding:
         reference = JPGB_08_08_3_0_1F_YBR_FULL
         msg = (
             r"The \(0028,0004\) 'Photometric Interpretation' value is "
-            "'RGB' however the encoded image's codestream contains a JFIF APP "
-            "marker which indicates it should be 'YBR_FULL_422'"
+            "'RGB' however the encoded image codestream for frame 0 contains a JFIF "
+            "APP marker which indicates it should be 'YBR_FULL_422'"
         )
         ds = dcmread(reference.path)
         ds.PhotometricInterpretation = "RGB"
@@ -276,6 +276,7 @@ class TestDecoding:
         }
         runner = DecodeRunner(JPEGBaseline8Bit)
         runner.set_options(**kwargs)
+        runner._index = 0
         frame = get_frame(ds.PixelData, 0, number_of_frames=1)
         unconverted = _decode_frame(frame, runner)
 
@@ -307,6 +308,7 @@ class TestDecoding:
         }
         runner = DecodeRunner(JPEG2000Lossless)
         runner.set_options(**kwargs)
+        runner._index = 0
         frame = get_frame(ds.PixelData, 0, number_of_frames=1)
         unconverted = _decode_frame(frame, runner)
 
@@ -339,6 +341,7 @@ class TestDecoding:
         }
         runner = DecodeRunner(RLELossless)
         runner.set_options(**kwargs)
+        runner._index = 0
         frame = get_frame(ds.PixelData, 0, number_of_frames=1)
         unconverted = _decode_frame(frame, runner)
 

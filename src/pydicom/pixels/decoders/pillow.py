@@ -15,9 +15,6 @@ from pydicom.pixels.decoders.base import DecodeRunner
 
 try:
     from PIL import Image, features
-
-    _HAVE_LIBJPEG = "libjpeg" in features.get_supported_features()
-    _HAVE_LIBJPEG_TURBO = "libjpeg_turbo" in features.get_supported_features()
 except ImportError:
     pass
 
@@ -37,17 +34,7 @@ DECODER_DEPENDENCIES = {
 }
 
 _LIBJPEG_SYNTAXES = [uid.JPEGBaseline8Bit, uid.JPEGExtended12Bit]
-_LIBJPEG_TURBO_SYNTAXES = [
-    uid.JPEGBaseline8Bit,
-    uid.JPEGExtended12Bit,
-    uid.JPEGExtended12Bit,
-]
 _OPENJPEG_SYNTAXES = [uid.JPEG2000Lossless, uid.JPEG2000]
-
-try:
-    _JPEGExtended12BitSupport = features.version_feature("libjpeg_turbo").split(".") > ("3", "1")
-except ValueError:
-    _JPEGExtended12BitSupport = False
 
 
 def is_available(uid: str) -> bool:
@@ -57,11 +44,8 @@ def is_available(uid: str) -> bool:
     if not _passes_version_check("PIL", (10, 3)):
         return False
 
-    if _HAVE_LIBJPEG:
-        return uid in _LIBJPEG_SYNTAXES:
-
-    elif _HAVE_LIBJPEG_TURBO:
-        return uid in _LIBJPEG_TURBO_SYNTAXES:
+    if uid in _LIBJPEG_SYNTAXES:
+        return bool(features.check_codec("jpg"))  # type: ignore[no-untyped-call]
 
     if uid in _OPENJPEG_SYNTAXES:
         return bool(features.check_codec("jpg_2000")) and HAVE_NP  # type: ignore[no-untyped-call]
@@ -76,10 +60,9 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
 
     # libjpeg only supports 8-bit JPEG Extended (can be 8 or 12 in the JPEG standard)
     # libjpeg-turbo supports up to
-    if not _JPEGExtended12BitSupport:
+    if tsyntax == uid.JPEGExtended12Bit and runner.bits_stored != 8:
         raise NotImplementedError(
-            "Pillow requires libjpeg-turbo v3.1 or higher to decode 'JPEG Extended' "
-            "for samples with 12-bit precision"
+            "Pillow does not support 'JPEG Extended' for samples with 12-bit precision"
         )
 
     image = Image.open(BytesIO(src), formats=("JPEG", "JPEG2000"))
@@ -93,22 +76,22 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
             #   behavior required by the `raw` flag
             # If raw is True or as_rgb is False then return YCbCr
             # Otherwise return RGB
-            if runner.get_option("raw", False) or runner.get_option("as_rgb", True):
-                if "adobe_transform" not in image.info:
-                    image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
-                else:
-                    # What does Pillow do if the Adobe APP14 marker is present?
-                    # APP14 format is:
-                    # Adobe\x00 | 2 bytes length | 1 | 1 | 1 | ColorTransform
-                    # 0: Unknown (RGB or CMYK) (CMYK not relevant, so RGB)
-                    # 1: YCbCr
-                    # 2: YCCK (not relevant)
-                    pass
-            else:
-                image.draft("RGB", image.size)  # type: ignore[no-untyped-call]
-                runner.set_frame_option(runner.index, "photometric_interpretation", PI.RGB)
+            # if runner.get_option("raw", False) or runner.get_option("as_rgb", True):
+            if "adobe_transform" not in image.info:
+                image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
+            #     else:
+            #         # What does Pillow do if the Adobe APP14 marker is present?
+            #         # APP14 format is:
+            #         # Adobe\x00 | 2 bytes length | 1 | 1 | 1 | ColorTransform
+            #         # 0: Unknown (RGB or CMYK) (CMYK not relevant, so RGB)
+            #         # 1: YCbCr
+            #         # 2: YCCK (not relevant)
+            #         pass
+            # else:
+            #     image.draft("RGB", image.size)  # type: ignore[no-untyped-call]
+            #     runner.set_frame_option(runner.index, "photometric_interpretation", PI.RGB)
 
-        runner.set_frame_option(runner.index, "plugin", "pillow")
+        runner.set_frame_option(runner.index, "decoding_plugin", "pillow")
 
         return cast(bytes, image.tobytes())
 
@@ -151,9 +134,9 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
         arr = arr.view(dtype)
         # Level-shift to match the unsigned integers range
         #   e.g. [0, 127, -128, -1] -> [-128, -1, 0, 127]
-        arr -= np.int32(2 ** (runner.bits_allocated - 1))
+        arr -= np.int32(2 ** (bits_allocated - 1))
 
-    if bit_shift := (runner.bits_allocated - precision):
+    if bit_shift := (bits_allocated - precision):
         # Bit shift to undo the upscaling of N-bit to 8- or 16-bit
         np.right_shift(arr, bit_shift, out=arr)
 
@@ -165,6 +148,6 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     if runner.bits_allocated == 1:
         runner.set_frame_option(runner.index, "is_bitpacked", False)
 
-    runner.set_frame_option(runner.index, "plugin", "pillow")
+    runner.set_frame_option(runner.index, "decoding_plugin", "pillow")
 
     return cast(bytes, arr.tobytes())

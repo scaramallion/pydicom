@@ -71,7 +71,7 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:
     if runner.bits_allocated == 1:
         runner.set_frame_option(runner.index, "is_bitpacked", True)
 
-    runner.set_frame_option(runner.index, "plugin", "pydicom")
+    runner.set_frame_option(runner.index, "decoding_plugin", "pydicom")
 
     return frame
 

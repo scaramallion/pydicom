@@ -83,5 +83,5 @@ class TestPyJpegLSDecoder:
         JLSN_08_01_1_0_1F.test(arr)
         assert arr.shape == JLSN_08_01_1_0_1F.shape
         # as_buffer() returns container sized to codestream precision
-        assert meta["bits_allocated"] == 8
-        assert meta["bits_stored"] == 8
+        assert meta[0]["bits_allocated"] == 8
+        assert meta[0]["bits_stored"] == 8

@@ -385,12 +385,12 @@ class TestDecodeRunner:
         assert runner._previous[1] == runner._decoders["pydicom"]
 
         arr = np.frombuffer(buffer, dtype=runner.pixel_dtype)
-        arr = runner.reshape(arr, as_frame=True)
+        arr = runner.reshape(arr, 0)
         RLE_16_1_10F.test(arr, index=0)
 
         buffer = runner.decode(9)
         arr = np.frombuffer(buffer, dtype=runner.pixel_dtype)
-        arr = runner.reshape(arr, as_frame=True)
+        arr = runner.reshape(arr, 9)
         RLE_16_1_10F.test(arr, index=9)
 
         def decode1(src, opts):
@@ -429,14 +429,14 @@ class TestDecodeRunner:
         assert runner._previous[1] == runner._decoders["pydicom"]
 
         arr = np.frombuffer(buffer, dtype=runner.pixel_dtype)
-        arr = runner.reshape(arr, as_frame=True)
+        arr = runner.reshape(arr, 0)
         RLE_16_1_10F.test(arr, index=0)
 
         for ii in range(9):
             buffer = next(data)
 
         arr = np.frombuffer(buffer, dtype=runner.pixel_dtype)
-        arr = runner.reshape(arr, as_frame=True)
+        arr = runner.reshape(arr, 9)
         RLE_16_1_10F.test(arr, index=9)
 
         pytest.raises(StopIteration, next, data)
@@ -522,7 +522,7 @@ class TestDecodeRunner:
             "bits_stored": 8,
         }
         runner.set_options(**opts)
-        d = runner.pixel_properties()
+        d = runner.pixel_properties(None)
         assert d["columns"] == 9
         assert d["rows"] == 10
         assert d["samples_per_pixel"] == 1
@@ -535,11 +535,11 @@ class TestDecodeRunner:
         assert "planar_configuration" not in d
 
         runner.set_option("pixel_keyword", "FloatPixelData")
-        assert "pixel_representation" not in runner.pixel_properties()
+        assert "pixel_representation" not in runner.pixel_properties(None)
 
         runner.set_option("samples_per_pixel", 3)
         runner.set_option("planar_configuration", 1)
-        assert runner.pixel_properties()["planar_configuration"] == 1
+        assert runner.pixel_properties(None)["planar_configuration"] == 1
 
 
 @pytest.mark.skipif(not HAVE_NP, reason="Numpy is not available")
@@ -774,7 +774,7 @@ class TestDecodeRunner_Reshape:
     def test_1frame_1sample(self, _1frame_1sample):
         """Test reshaping 1 frame, 1 sample/pixel."""
         self.runner.set_option("samples_per_pixel", 1)
-        arr = self.runner.reshape(_1frame_1sample)
+        arr = self.runner.reshape(_1frame_1sample, None)
         assert (4, 5) == arr.shape
         assert np.array_equal(arr, self.ref_1_1)
 
@@ -782,7 +782,7 @@ class TestDecodeRunner_Reshape:
         buffer = arr.tobytes()
         out = np.frombuffer(buffer, arr.dtype)
         assert not out.flags.writeable
-        out = self.runner.reshape(out)
+        out = self.runner.reshape(out, None)
         assert not out.flags.writeable
 
     def test_1frame_3sample_0conf(self, _1frame_3sample_0config):
@@ -790,7 +790,7 @@ class TestDecodeRunner_Reshape:
         self.runner.set_option("number_of_frames", 1)
         self.runner.set_option("samples_per_pixel", 3)
         self.runner.set_option("planar_configuration", 0)
-        arr = self.runner.reshape(_1frame_3sample_0config)
+        arr = self.runner.reshape(_1frame_3sample_0config, None)
         assert (4, 5, 3) == arr.shape
         assert np.array_equal(arr, self.ref_1_3)
 
@@ -798,7 +798,7 @@ class TestDecodeRunner_Reshape:
         buffer = arr.tobytes()
         out = np.frombuffer(buffer, arr.dtype)
         assert not out.flags.writeable
-        out = self.runner.reshape(out)
+        out = self.runner.reshape(out, None)
         assert not out.flags.writeable
 
     def test_1frame_3sample_1conf(self, _1frame_3sample_1config):
@@ -806,7 +806,7 @@ class TestDecodeRunner_Reshape:
         self.runner.set_option("number_of_frames", 1)
         self.runner.set_option("samples_per_pixel", 3)
         self.runner.set_option("planar_configuration", 1)
-        arr = self.runner.reshape(_1frame_3sample_1config)
+        arr = self.runner.reshape(_1frame_3sample_1config, None)
         assert (4, 5, 3) == arr.shape
         assert np.array_equal(arr, self.ref_1_3)
 
@@ -814,14 +814,14 @@ class TestDecodeRunner_Reshape:
         buffer = arr.tobytes()
         out = np.frombuffer(buffer, arr.dtype)
         assert not out.flags.writeable
-        out = self.runner.reshape(out)
+        out = self.runner.reshape(out, None)
         assert not out.flags.writeable
 
     def test_2frame_1sample(self, _1frame_1sample, _2frame_1sample):
         """Test reshaping 2 frame, 1 sample/pixel."""
         self.runner.set_option("number_of_frames", 2)
         self.runner.set_option("samples_per_pixel", 1)
-        arr = self.runner.reshape(_2frame_1sample)
+        arr = self.runner.reshape(_2frame_1sample, None)
         assert (2, 4, 5) == arr.shape
         assert np.array_equal(arr, self.ref_2_1)
 
@@ -829,10 +829,10 @@ class TestDecodeRunner_Reshape:
         buffer = arr.tobytes()
         out = np.frombuffer(buffer, arr.dtype)
         assert not out.flags.writeable
-        out = self.runner.reshape(out)
+        out = self.runner.reshape(out, None)
         assert not out.flags.writeable
 
-        arr = self.runner.reshape(_1frame_1sample, as_frame=True)
+        arr = self.runner.reshape(_1frame_1sample, 0)
         assert (4, 5) == arr.shape
         assert np.array_equal(arr, self.ref_1_1)
 
@@ -843,7 +843,7 @@ class TestDecodeRunner_Reshape:
         self.runner.set_option("number_of_frames", 2)
         self.runner.set_option("samples_per_pixel", 3)
         self.runner.set_option("planar_configuration", 0)
-        arr = self.runner.reshape(_2frame_3sample_0config)
+        arr = self.runner.reshape(_2frame_3sample_0config, None)
         assert (2, 4, 5, 3) == arr.shape
         assert np.array_equal(arr, self.ref_2_3)
 
@@ -851,10 +851,10 @@ class TestDecodeRunner_Reshape:
         buffer = arr.tobytes()
         out = np.frombuffer(buffer, arr.dtype)
         assert not out.flags.writeable
-        out = self.runner.reshape(out)
+        out = self.runner.reshape(out, None)
         assert not out.flags.writeable
 
-        arr = self.runner.reshape(_1frame_3sample_0config, as_frame=True)
+        arr = self.runner.reshape(_1frame_3sample_0config, 0)
         assert (4, 5, 3) == arr.shape
         assert np.array_equal(arr, self.ref_1_3)
 
@@ -865,18 +865,22 @@ class TestDecodeRunner_Reshape:
         self.runner.set_option("number_of_frames", 2)
         self.runner.set_option("samples_per_pixel", 3)
         self.runner.set_option("planar_configuration", 1)
-        arr = self.runner.reshape(_2frame_3sample_1config)
+        arr = self.runner.reshape(_2frame_3sample_1config, None)
         assert (2, 4, 5, 3) == arr.shape
         assert np.array_equal(arr, self.ref_2_3)
 
         # Test reshape to (frames, rows, cols, planes) is view-only
+        self.runner._frame_meta = {}
+        self.runner.set_option("planar_configuration", 1)
         buffer = arr.tobytes()
         out = np.frombuffer(buffer, arr.dtype)
         assert not out.flags.writeable
-        out = self.runner.reshape(out)
+        out = self.runner.reshape(out, None)
         assert not out.flags.writeable
 
-        arr = self.runner.reshape(_1frame_3sample_1config, as_frame=True)
+        self.runner._frame_meta = {}
+        self.runner.set_option("planar_configuration", 1)
+        arr = self.runner.reshape(_1frame_3sample_1config, 0)
         assert (4, 5, 3) == arr.shape
         assert np.array_equal(arr, self.ref_1_3)
 
@@ -1603,7 +1607,7 @@ class TestDecoder_Buffer:
             arr, meta_a = decoder.as_array(reference.ds, index=index)
             buffer, meta_b = decoder.as_buffer(reference.ds, index=index)
             assert arr.tobytes() == buffer
-            assert meta_a == meta_b
+            assert meta_a == meta_b[index]
             assert meta_a["number_of_frames"] == 1
 
         msg = "There is insufficient pixel data to contain 11 frames"
@@ -1622,7 +1626,7 @@ class TestDecoder_Buffer:
         assert isinstance(buffer, memoryview)
         assert arr.tobytes() == buffer
         assert buffer.obj is reference.ds.PixelData
-        assert meta_a == meta_b
+        assert meta_a == meta_b[0]
 
         # mutable source buffer
         # Also tests buffer-like `src`
@@ -1712,8 +1716,8 @@ class TestDecoder_Buffer:
             buffer, meta = decoder.as_buffer(reference.ds, index=index)
             assert isinstance(buffer, bytes | bytearray)
             assert arr.tobytes() == buffer
-            assert meta["bits_stored"] == 12
-            assert meta["number_of_frames"] == 1
+            assert meta[index]["bits_stored"] == 12
+            assert meta[index]["number_of_frames"] == 1
 
     def test_encapsulated_plugin(self):
         """Test `decoding_plugin` with an encapsulated pixel data."""
@@ -1769,12 +1773,12 @@ class TestDecoder_Buffer:
             buffer, meta = decoder.as_buffer(src, **runner.options)
 
         assert len(buffer) == 11 * 64 * 64 * 2
-        assert meta["number_of_frames"] == 11
+        assert len(meta) == 11
 
         runner.set_option("allow_excess_frames", False)
         buffer, meta = decoder.as_buffer(src, **runner.options)
         assert len(buffer) == 10 * 64 * 64 * 2
-        assert meta["number_of_frames"] == 10
+        assert len(meta) == 10
 
     def test_encapsulated_excess_frames_singlebit(self):
         """Test returning excess frame data"""
@@ -1798,12 +1802,12 @@ class TestDecoder_Buffer:
             buffer, meta = decoder.as_buffer(src, **runner.options)
 
         assert len(buffer) == (4 * 512 * 512) // 8
-        assert meta["number_of_frames"] == 4
+        assert len(meta) == 4
 
         runner.set_option("allow_excess_frames", False)
         buffer, meta = decoder.as_buffer(src, **runner.options)
         assert len(buffer) == (3 * 512 * 512) // 8
-        assert meta["number_of_frames"] == 3
+        assert len(meta) == 3
 
     def test_expb_ow_index_invalid_raises(self):
         """Test invalid index with BE swapped OW raises"""

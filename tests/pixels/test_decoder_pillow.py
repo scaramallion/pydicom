@@ -17,8 +17,8 @@ except ImportError:
     pass
 
 from pydicom import dcmread
-from pydicom.encaps import get_frame
-from pydicom.pixels import get_decoder
+from pydicom.encaps import encapsulate, get_frame
+from pydicom.pixels import get_decoder, convert_color_space
 from pydicom.pixels.decoders.pillow import is_available
 from pydicom.uid import (
     JPEGBaseline8Bit,
@@ -33,6 +33,7 @@ from .pixels_reference import (
     JPGB_08_08_3_0_1F_RGB,  # has RGB component IDs
     JPGB_08_08_3_0_1F_YBR_FULL,  # has JFIF APP marker
     J2KR_16_10_1_0_1F_M1,
+    JPGB_08_08_3_0_1F_RGB_APP14,  # Adobe APP14 in RGB
 )
 
 
@@ -118,11 +119,54 @@ class TestLibJpegDecoder:
         with pytest.warns(UserWarning, match=msg):
             arr, meta = decoder.as_array(ds, raw=True, decoding_plugin="pillow")
 
-        reference.test(arr, plugin="pylibjpeg")
+        reference.test(arr, plugin="pillow")
         assert arr.shape == reference.shape
         assert arr.dtype == reference.dtype
         assert arr.flags.writeable
         assert meta["photometric_interpretation"] == "YBR_FULL_422"
+
+    def test_adobe_color_space(self):
+        """Test color space conversions if Adobe APP14 is present."""
+        reference = JPGB_08_08_3_0_1F_RGB_APP14
+        ds = dcmread(reference.path)
+        decoder = get_decoder(JPEGBaseline8Bit)
+
+        # Color space is in RGB so no transform needed
+        assert ds.PhotometricInterpretation == "RGB"
+        arr, meta = decoder.as_array(ds, raw=True, decoding_plugin="pillow")
+        reference.test(arr, plugin="pillow")
+        assert arr.shape == reference.shape
+        assert arr.dtype == reference.dtype
+        assert arr.flags.writeable
+        assert meta["photometric_interpretation"] == "RGB"
+
+        # No conversion should be applied as already RGB
+        arr, meta = decoder.as_array(ds, raw=False, decoding_plugin="pillow")
+        reference.test(arr, plugin="pillow")
+        assert arr.shape == reference.shape
+        assert arr.dtype == reference.dtype
+        assert arr.flags.writeable
+        assert meta["photometric_interpretation"] == "RGB"
+
+        # Change apparent color space to YCbCr
+        codestream = bytearray(get_frame(ds.PixelData, 0, number_of_frames=1))
+        codestream[17] = 1
+        ds.PixelData = encapsulate([codestream])
+        arr, meta = decoder.as_array(ds, raw=True, decoding_plugin="pillow")
+
+        # No conversion should be used with raw=True so should match reference
+        assert meta["photometric_interpretation"] == "YBR_FULL_422"
+        reference.test(arr, plugin="pillow")
+        assert arr.shape == reference.shape
+        assert arr.dtype == reference.dtype
+        assert arr.flags.writeable
+
+        # With raw=False Pillow should apply a YCbCr -> RGB conversion
+        ref = convert_color_space(arr, "YBR_FULL", "RGB")
+        print("A")
+        arr, meta = decoder.as_array(ds, raw=False, decoding_plugin="pillow")
+        assert meta["photometric_interpretation"] == "RGB"
+        assert np.array_equal(arr, ref)
 
 
 @pytest.mark.skipif(SKIP_OJ, reason="Test is missing dependencies")

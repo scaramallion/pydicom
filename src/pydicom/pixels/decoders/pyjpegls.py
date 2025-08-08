@@ -30,6 +30,8 @@ def is_available(uid: str) -> bool:
 
 def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:
     """Return the decoded image data in `src` as a :class:`bytearray`."""
+    runner.set_frame_option(runner.index, "decoding_plugin", "pydicom")
+
     buffer, info = jpeg_ls.decode_pixel_data(src)
     # Interleave mode 0 is colour-by-plane, 1 and 2 are colour-by-pixel
     if info["components"] > 1:
@@ -43,7 +45,5 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:
         runner.set_frame_option(runner.index, "bits_allocated", 8)
     elif 8 < precision <= 16:
         runner.set_frame_option(runner.index, "bits_allocated", 16)
-
-    runner.set_frame_option(runner.index, "decoding_plugin", "pyjpegls")
 
     return cast(bytearray, buffer)

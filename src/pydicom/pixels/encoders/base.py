@@ -93,6 +93,9 @@ class EncodeRunner(RunnerBase):
         self._undeletable = ("transfer_syntax_uid", "pixel_keyword", "byteorder")
         self._encoders: dict[str, EncodeFunction] = {}
 
+        # The frame currently being encoded
+        self._index = 0
+
     def encode(self, index: int | None) -> bytes:
         """Return an encoded frame of pixel data as :class:`bytes`.
 
@@ -107,6 +110,8 @@ class EncodeRunner(RunnerBase):
         bytes
             The encoded pixel data frame.
         """
+        self._index = index
+
         failure_messages = []
         for name, func in self._encoders.items():
             try:
@@ -184,7 +189,6 @@ class EncodeRunner(RunnerBase):
         #   16 < precision <= 32: a 32-bit container (int/long)
         #   32 < precision <= 64: a 64-bit container (long long)
         if self.bits_allocated == 1:
-
             # Data *may* be bit-packed, use length and source type to infer
             total_pixels = self.frame_length(unit="pixels") * self.number_of_frames
 
@@ -192,7 +196,7 @@ class EncodeRunner(RunnerBase):
                 self._src_type == "Buffer" and len(self._src) < total_pixels
             ):
                 # Pass to the encoder in a bitpacked form
-                self.set_option("is_bitpacked", True)
+                self.set_frame_option(index, "is_bitpacked", True)
                 return get_packed_frame(
                     src=cast(bytes, self._src),
                     index=0 if index is None else index,
@@ -201,10 +205,11 @@ class EncodeRunner(RunnerBase):
                 )
 
             # Array or non-bitpacked buffer
-            self.set_option("is_bitpacked", False)
+            self.set_frame_option(index, "is_bitpacked", False)
             bytes_per_frame = cast(int, self.frame_length(unit="pixels"))
         else:
             bytes_per_frame = cast(int, self.frame_length(unit="bytes"))
+
         start = 0 if index is None else index * bytes_per_frame
         src = cast(bytes, self.src[start : start + bytes_per_frame])
 
@@ -338,6 +343,7 @@ class EncodeRunner(RunnerBase):
 
         return "\n".join(s)
 
+    # FIXME
     def _test_for(self, test: str) -> bool:
         """Return the result of `test` as :class:`bool`."""
         if test == "gdcm_be_system":

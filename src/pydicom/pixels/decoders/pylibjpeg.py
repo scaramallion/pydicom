@@ -75,6 +75,7 @@ def is_available(uid: str) -> bool:
 
 def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:  # type: ignore[return]
     """Return the decoded image data in `src` as a :class:`bytearray`."""
+    runner.set_frame_option(runner.index, "decoding_plugin", "pylibjpeg")
     tsyntax = runner.transfer_syntax
     bits_allocated = runner.bits_allocated
 
@@ -128,7 +129,5 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:  # type: ignor
         # Signal whether single-bit data is represented in unpacked form
         if runner.bits_allocated == 1:
             runner.set_frame_option(runner.index, "is_bitpacked", tsyntax == uid.RLELossless)
-
-        runner.set_frame_option(runner.index, "decoding_plugin", "pylibjpeg")
 
         return frame

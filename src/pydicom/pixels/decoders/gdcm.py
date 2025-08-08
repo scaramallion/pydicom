@@ -65,6 +65,8 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     bytes
         The decoded pixel data frame.
     """
+    runner.set_frame_option(runner.index, "decoding_plugin", "gdcm")
+
     tsyntax = runner.transfer_syntax
     photometric_interpretation = runner.photometric_interpretation
     bits_stored = runner.bits_stored
@@ -175,7 +177,5 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     # Signal that single-bit data is represented in unpacked form
     if runner.bits_allocated == 1:
         runner.set_frame_option(runner.index, "is_bitpacked", False)
-
-    runner.set_frame_option(runner.index, "decoding_plugin", "gdcm")
 
     return frame

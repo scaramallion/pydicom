@@ -49,9 +49,10 @@ def _encode_frame(src: bytes, runner: EncodeRunner) -> bytes | bytearray:
     if tsyntax == uid.RLELossless:
         return cast(bytes, encoder(src, **runner.options))
 
-    if runner.options.get("is_bitpacked", False):
+    if runner.get_frame_option(runner.index, "is_bitpacked", False):
         pixels_per_frame = runner.rows * runner.columns * runner.samples_per_pixel
         src = cast(bytes, unpack_bits(src, as_array=False)[:pixels_per_frame])
+        runner.set_frame_option(runner.index, "is_bitpacked", False)
 
     opts = dict(runner.options)
     if runner.photometric_interpretation == PI.RGB:

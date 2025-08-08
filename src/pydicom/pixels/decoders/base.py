@@ -272,8 +272,10 @@ def _correct_unused_bits(
 
     return arr
 
-# FIXME
-def _apply_sign_correction(arr: "np.ndarray", runner: "DecodeRunner") -> "np.ndarray":
+
+def _apply_sign_correction(
+    arr: "np.ndarray", runner: "DecodeRunner", index: int | None = None
+) -> "np.ndarray":
     """Convert `arr` to match the signedness required by the 'pixel_representation'."""
     # JPEG 2000 Example:
     # Dataset: Pixel Representation 1, Bits Stored 13, Bits Allocated 16
@@ -301,20 +303,69 @@ def _apply_sign_correction(arr: "np.ndarray", runner: "DecodeRunner") -> "np.nda
     #     0001 1000 0011 0000  (value 6192)
     # Which can be fixed in the same way as for signed integers.
     if runner.transfer_syntax in JPEG2000TransferSyntaxes:
-        j2k_signed = runner.get_frame_option(0, "j2k_is_signed", runner.pixel_representation)
-        precision = runner.get_frame_option(0, "j2k_precision", runner.bits_stored)
-        bit_shift = 8 * arr.dtype.itemsize - precision
-        if bit_shift and j2k_signed != runner.pixel_representation:
-            np.left_shift(arr, bit_shift, out=arr)
-            np.right_shift(arr, bit_shift, out=arr)
-    elif runner.transfer_syntax in JPEGLSTransferSyntaxes:
-        # JPEG-LS has no way to track signedness, so signed integers are
-        #   always decoded as unsigned
-        precision = runner.get_frame_option(0, "jls_precision", runner.bits_stored)
-        bit_shift = 8 * arr.dtype.itemsize - precision
-        if bit_shift:
-            np.left_shift(arr, bit_shift, out=arr)
-            np.right_shift(arr, bit_shift, out=arr)
+        container_size = 8 * arr.dtype.itemsize
+        pixel_representation = runner.pixel_representation
+        if index is None:
+            signs = [
+                meta.get("j2k_is_signed", pixel_representation)
+                for meta in runner._frame_meta.values()
+            ]
+        else:
+            signs = [runner.get_frame_option(index, "j2k_is_signed", pixel_representation)]
+
+        bits_stored = runner.bits_stored
+        if index is None:
+            bit_shifts = [
+                container_size - meta.get("j2k_precision", bits_stored)
+                for meta in runner._frame_meta.values()
+            ]
+        else:
+            precision = runner.get_frame_option(index, "j2k_precision", bits_stored)
+            bit_shifts = [container_size - precision]
+
+        # Single or multi-framed with consistent sign and precision values
+        if len(set(signs)) == 1 and len(set(bit_shifts)) == 1:
+            if bit_shifts[0] and signs[0] != pixel_representation:
+                np.left_shift(arr, bit_shifts[0], out=arr)
+                np.right_shift(arr, bit_shifts[0], out=arr)
+
+            return arr
+
+        # Multi-framed with inconsistent sign or precision values
+        for frame, is_signed, bit_shift in zip(arr, signs, bit_shifts):
+            if bit_shift and is_signed != pixel_representation:
+                np.left_shift(frame, bit_shift, out=frame)
+                np.right_shift(frame, bit_shift, out=frame)
+
+        return arr
+
+    # JPEG-LS has no way to track signedness, so signed integers are
+    #   always decoded as unsigned and need to be corrected
+    if runner.transfer_syntax in JPEGLSTransferSyntaxes:
+        container_size = 8 * arr.dtype.itemsize
+        bits_stored = runner.bits_stored
+        if index is None:
+            bit_shifts = [
+                container_size - meta.get("jls_precision", bits_stored)
+                for meta in runner._frame_meta.values()
+            ]
+        else:
+            precision = runner.get_frame_option(index, "jls_precision", bits_stored)
+            bit_shifts = [container_size - precision]
+
+        # Single or multi-framed with consistent precision values
+        if len(set(bit_shifts)) == 1:
+            if bit_shifts[0]:
+                np.left_shift(arr, bit_shifts[0], out=arr)
+                np.right_shift(arr, bit_shifts[0], out=arr)
+
+            return arr
+
+        # Multi-framed with inconsistent precision values
+        for frame, bit_shift in zip(arr, bit_shifts):
+            if bit_shift:
+                np.left_shift(frame, bit_shift, out=frame)
+                np.right_shift(frame, bit_shift, out=frame)
 
     return arr
 
@@ -398,18 +449,35 @@ class DecodeRunner(RunnerBase):
             )
             return
 
-        # A JFIF APP marker means the decoded image should be YBR colour space
-        #   https://www.w3.org/Graphics/JPEG/jfif.pdf
+        # ISO/IEC 10918-6/ITU T.872
+        # https://www.itu.int/rec/dologin_pub.asp?lang=e&id=T-REC-T.872-201206-I!!PDF-E
         cs = (
             PI.YBR_FULL_422 if self.transfer_syntax == JPEGBaseline8Bit else PI.YBR_FULL
         )
         for marker in info.get("app", {}).values():
+            expected_cs = None
             if marker.startswith(b"JFIF") and "YBR" not in pi:
-                self.set_frame_option(index, "photometric_interpretation", cs)
+                # A JFIF APP marker means the decoded image should be YBR colour space
+                #   https://www.w3.org/Graphics/JPEG/jfif.pdf
+                expected_cs = cs
+                marker_name = "a JFIF APP"
+            elif marker.startswith(b"Adobe"):
+                # Adobe APP14 marker has the color space at byte 12
+                #    0: RGB or CMYK (CMYK not relevant, so RGB)
+                #    1: YCbCr
+                #    2: YCCK (not relevant)
+                marker_name = "an Adobe APP14"
+                if marker[11] == 0 and "YBR" in pi:
+                    expected_cs = PI.RGB
+                elif marker[11] == 1 and "YBR" not in pi:
+                    expected_cs = cs
+
+            if expected_cs is not None:
+                self.set_frame_option(index, "photometric_interpretation", expected_cs)
                 warn_and_log(
-                    "The (0028,0004) 'Photometric Interpretation' value is "
-                    f"'{pi}' however the encoded image codestream for frame {index} "
-                    f"contains a JFIF APP marker which indicates it should be '{cs}'"
+                    f"The (0028,0004) 'Photometric Interpretation' value is '{pi}' "
+                    f"however the encoded image codestream for frame {index} contains "
+                    f"{marker_name} marker which indicates it should be '{expected_cs}'"
                 )
                 return
 
@@ -579,9 +647,6 @@ class DecodeRunner(RunnerBase):
         )
         if self.bits_allocated == 1:
             if not self.get_frame_option(index, "is_bitpacked", True):
-                # Determine the unpacked length
-                # length = (length // 8 + (length % 8 > 0)) * 8
-
                 return length
 
             if self.transfer_syntax.is_encapsulated:
@@ -912,14 +977,14 @@ class DecodeRunner(RunnerBase):
         if not values:
             return None
 
-        if len(set(values)) != 1:
-            values_str = ", ".join([str(v) for v in sorted(list(set(values)))])
-            raise ValueError(
-                f"Multiple inconsistent inter-frame values found for '{name}': "
-                f"{values_str}"
-            )
+        if len(set(values)) == 1:
+            return values[0]
 
-        return values[0]
+        values_str = ", ".join([str(v) for v in sorted(list(set(values)))])
+        raise ValueError(
+            f"Multiple inconsistent inter-frame values found for '{name}': "
+            f"{values_str}"
+        )
 
     # TODO: v4.0 - remove `as_frame`
     def reshape(
@@ -1403,6 +1468,9 @@ class Decoder(CoderBase):
         runner = DecodeRunner(self.UID)
         runner.set_source(src)
         runner.set_options(**kwargs)
+        if raw:
+            runner.set_option("as_rgb", False)
+
         runner.set_decoders(
             cast(
                 dict[str, "DecodeFunction"],
@@ -1422,8 +1490,6 @@ class Decoder(CoderBase):
         else:
             arr = self._as_array_encapsulated(runner, index)
             as_writeable = True
-
-        print(runner._frame_meta)
 
         if runner._test_for("sign_correction"):
             arr = _apply_sign_correction(arr, runner)
@@ -1871,7 +1937,6 @@ class Decoder(CoderBase):
         frame_generator = runner.iter_decode()
         for idx in range(runner.number_of_frames):
             frame = next(frame_generator)
-            print(runner)
             length_bytes = runner.frame_length(unit="bytes", index=idx)
             if (actual := len(frame)) != length_bytes:
                 raise ValueError(
@@ -2164,6 +2229,9 @@ class Decoder(CoderBase):
         runner = DecodeRunner(self.UID)
         runner.set_source(src)
         runner.set_options(**kwargs)
+        if raw:
+            runner.set_option("as_rgb", False)
+
         runner.set_decoders(
             cast(
                 dict[str, "DecodeFunction"],
@@ -2201,7 +2269,7 @@ class Decoder(CoderBase):
 
                 arr = runner.reshape(arr, idx)
                 if runner._test_for("sign_correction"):
-                    arr = _apply_sign_correction(arr, runner)
+                    arr = _apply_sign_correction(arr, runner, idx)
                 elif runner._test_for("shift_correction"):
                     arr = _correct_unused_bits(arr, runner, log_warning=log_warning)
                     log_warning = False
@@ -2224,7 +2292,7 @@ class Decoder(CoderBase):
             arr = func(runner, idx)
 
             if runner._test_for("sign_correction"):
-                arr = _apply_sign_correction(arr, runner)
+                arr = _apply_sign_correction(arr, runner, idx)
             elif runner._test_for("shift_correction"):
                 arr = _correct_unused_bits(arr, runner, log_warning=log_warning)
                 log_warning = False
@@ -2364,18 +2432,18 @@ DeflatedExplicitVRLittleEndianDecoder = Decoder(DeflatedExplicitVRLittleEndian)
 JPEGBaseline8BitDecoder = Decoder(JPEGBaseline8Bit)
 JPEGBaseline8BitDecoder.add_plugins(
     [
+        ("pillow", ("pydicom.pixels.decoders.pillow", "_decode_frame")),
         ("gdcm", ("pydicom.pixels.decoders.gdcm", "_decode_frame")),
         ("pylibjpeg", ("pydicom.pixels.decoders.pylibjpeg", "_decode_frame")),
-        ("pillow", ("pydicom.pixels.decoders.pillow", "_decode_frame")),
     ]
 )
 
 JPEGExtended12BitDecoder = Decoder(JPEGExtended12Bit)
 JPEGExtended12BitDecoder.add_plugins(
     [
+        ("pillow", ("pydicom.pixels.decoders.pillow", "_decode_frame")),
         ("gdcm", ("pydicom.pixels.decoders.gdcm", "_decode_frame")),
         ("pylibjpeg", ("pydicom.pixels.decoders.pylibjpeg", "_decode_frame")),
-        ("pillow", ("pydicom.pixels.decoders.pillow", "_decode_frame")),
     ]
 )
 

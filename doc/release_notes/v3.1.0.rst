@@ -6,6 +6,31 @@ Changes
 
 * DICOM dictionary updated to 2024d.
 * Prefer using pylibjpeg over GDCM when encoding *RLE Lossless*.
+* Prefer using Pillow when decoding *JPEG Baseline 8-bit* and *JPEG Extended 12-bit*
+* Improvements made to communications with the plugins when decoding and encoding pixel data:
+
+  .. currentmodule:: pydicom.pixels.decoders.base
+
+  * Added :attr:`DecodeRunner.index<DecodeRunner.index>`,
+    :meth:`DecodeRunner.get_frame_option<DecodeRunner.get_frame_option>`,
+    :meth:`DecodeRunner.set_frame_option<DecodeRunner.set_frame_option>`,
+    and :meth:`DecodeRunner.frame_dtype<DecodeRunner.frame_dtype>`.
+  * Added `index` parameters to :meth:`DecodeRunner.frame_length<DecodeRunner.frame_length>`,
+    :meth:`DecodeRunner.pixel_properties<DecodeRunner.pixel_properties>`,
+    :meth:`DecodeRunner.process<DecodeRunner.process>` and
+    :meth:`DecodeRunner.reshape<DecodeRunner.reshape>`.
+
+  .. currentmodule:: pydicom.pixels.encoders.base
+
+  * Added :attr:`EncodeRunner.index<EncodeRunner.index>`,
+    :meth:`EncodeRunner.get_frame_option<EncodeRunner.get_frame_option>` and
+    :meth:`EncodeRunner.set_frame_option<EncodeRunner.set_frame_option>`.
+
+.. currentmodule:: pydicom.pixels.decoders.base
+
+* The metadata returned by :meth:`Decoder.as_buffer<Decoder.as_buffer>` is now a
+  ``dict`` containing the per-frame metadata to help account for inter-frame variances
+  when decoding.
 
 Fixes
 -----
@@ -48,10 +73,10 @@ Enhancements
 * Updated UIDs to version 2024d of the DICOM Standard
 * The following UID constants have been added:
 
-    * :attr:`~pydicom.uid.JPEGXLLossless`
-    * :attr:`~pydicom.uid.JPEGXLJPEGRecompression`
-    * :attr:`~pydicom.uid.JPEGXL`
-    * :attr:`~pydicom.uid.DeflatedImageFrameCompression`
+  * :attr:`~pydicom.uid.JPEGXLLossless`
+  * :attr:`~pydicom.uid.JPEGXLJPEGRecompression`
+  * :attr:`~pydicom.uid.JPEGXL`
+  * :attr:`~pydicom.uid.DeflatedImageFrameCompression`
 * Added ability to specify tag numbers in the CLI commands (allows private tags to be specified)
 * Removed `exec` and `eval` from tests, CLI, and scripts for improved security (:issue:`2193`)
 * Added support for up to 16-bit input images to :func:`~pydicom.pixels.convert_color_space`
@@ -59,3 +84,14 @@ Enhancements
   :func:`~pydicom.pixels.convert_color_space` (:issue:`2210`)
 * Added support for compressing and decompressing *Deflated Image Frame Compression* (:issue:`2213`)
 * Suggest an element keyword when an unknown camel case dataset attribute is used.
+* When decoding JPEG pixel data use Pillow's color transformations rather than
+  :func:`~pydicom.pixels.convert_color_space` where applicable (:issue:`2228`)
+* Take the color space information from an Adobe APP14 marker into account when decoding
+  pixel data for JPEG transfer syntaxes.
+
+Deprecations
+------------
+
+* The `as_frame` parameter for :meth:`DecodeRunner.pixel_properties
+  <DecodeRunner.pixel_properties>` and :meth:`DecodeRunner.reshape<DecodeRunner.reshape>`
+  will be removed in v4.0.

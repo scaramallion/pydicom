@@ -55,6 +55,8 @@ def is_available(uid: str) -> bool:
 
 def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     """Return the decoded image data in `src` as a :class:`bytes`."""
+    runner.set_frame_option(runner.index, "decoding_plugin", "pillow")
+
     tsyntax = runner.transfer_syntax
     bits_allocated = runner.bits_allocated
 
@@ -67,31 +69,29 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
 
     image = Image.open(BytesIO(src), formats=("JPEG", "JPEG2000"))
     if tsyntax in _LIBJPEG_SYNTAXES:
-        if runner.samples_per_pixel != 1:
-            # If the Adobe APP14 marker is not present then Pillow assumes
-            #   that JPEG images were transformed into YCbCr color space prior
-            #   to compression, so setting the image mode to YCbCr signals we
-            #   don't want any color transformations.
-            # Any color transformations would be inconsistent with the
-            #   behavior required by the `raw` flag
-            # If raw is True or as_rgb is False then return YCbCr
-            # Otherwise return RGB
-            # if runner.get_option("raw", False) or runner.get_option("as_rgb", True):
-            if "adobe_transform" not in image.info:
-                image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
-            #     else:
-            #         # What does Pillow do if the Adobe APP14 marker is present?
-            #         # APP14 format is:
-            #         # Adobe\x00 | 2 bytes length | 1 | 1 | 1 | ColorTransform
-            #         # 0: Unknown (RGB or CMYK) (CMYK not relevant, so RGB)
-            #         # 1: YCbCr
-            #         # 2: YCCK (not relevant)
-            #         pass
-            # else:
-            #     image.draft("RGB", image.size)  # type: ignore[no-untyped-call]
-            #     runner.set_frame_option(runner.index, "photometric_interpretation", PI.RGB)
+        if runner.samples_per_pixel == 1:
+            return cast(bytes, image.tobytes())
 
-        runner.set_frame_option(runner.index, "decoding_plugin", "pillow")
+        # Multi-sample image: ensure the output color space is correct
+        cs = runner.get_frame_option(runner.index, "photometric_interpretation")
+        convert_to_rgb = runner.get_option("as_rgb", False) and "YBR" in cs
+
+        if "adobe_transform" not in image.info:
+            # If the Adobe APP14 marker is not present then Pillow assumes that JPEG
+            #    images were transformed into YCbCr color space prior to compression
+            if convert_to_rgb:
+                # Pillow will default to applying a YCbCr -> RGB conversion
+                runner.set_frame_option(runner.index, "photometric_interpretation", PI.RGB)
+            else:
+                # Use Image.draft() to signal no color transformation
+                image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
+        elif image.info["adobe_transform"] == 1:  # 0: RGB, 1: YCbCr
+            # If the Adobe APP14 marker is present then Pillow uses the value to
+            #   determine the color space and defaults to returning RGB
+            if convert_to_rgb:
+                runner.set_frame_option(runner.index, "photometric_interpretation", PI.RGB)
+            elif "YBR" in cs:
+                image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
 
         return cast(bytes, image.tobytes())
 
@@ -147,7 +147,5 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     # Signal that single-bit data is represented in unpacked form
     if runner.bits_allocated == 1:
         runner.set_frame_option(runner.index, "is_bitpacked", False)
-
-    runner.set_frame_option(runner.index, "decoding_plugin", "pillow")
 
     return cast(bytes, arr.tobytes())

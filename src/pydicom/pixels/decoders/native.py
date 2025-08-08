@@ -52,6 +52,8 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:
     bytearray
         The decoded frame, ordered as planar configuration 1.
     """
+    runner.set_frame_option(runner.index, "decoding_plugin", "pydicom")
+
     if runner.transfer_syntax == RLELossless:
         frame = _rle_decode_frame(
             src,
@@ -70,8 +72,6 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:
     # Signal that single bit data is represented in bit-packed form
     if runner.bits_allocated == 1:
         runner.set_frame_option(runner.index, "is_bitpacked", True)
-
-    runner.set_frame_option(runner.index, "decoding_plugin", "pydicom")
 
     return frame
 

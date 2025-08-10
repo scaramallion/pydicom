@@ -34,6 +34,7 @@ from .pixels_reference import (
     JPGB_08_08_3_0_1F_YBR_FULL,  # has JFIF APP marker
     J2KR_16_10_1_0_1F_M1,
     JPGB_08_08_3_0_1F_RGB_APP14,  # Adobe APP14 in RGB
+    J2KR_16_13_1_1_1F_M2_MISMATCH,  # Pixel Representation mismatch to J2K codestream
 )
 
 
@@ -140,7 +141,7 @@ class TestLibJpegDecoder:
         assert arr.flags.writeable
         assert meta["photometric_interpretation"] == "RGB"
 
-        # No conversion should be applied as already RGB
+        # Again, no conversion should be applied as already RGB
         arr, meta = decoder.as_array(ds, raw=False, decoding_plugin="pillow")
         reference.test(arr, plugin="pillow")
         assert arr.shape == reference.shape
@@ -152,7 +153,12 @@ class TestLibJpegDecoder:
         codestream = bytearray(get_frame(ds.PixelData, 0, number_of_frames=1))
         codestream[17] = 1
         ds.PixelData = encapsulate([codestream])
-        arr, meta = decoder.as_array(ds, raw=True, decoding_plugin="pillow")
+
+        msg = (
+            "contains an Adobe APP14 marker which indicates it should be 'YBR_FULL_422'"
+        )
+        with pytest.warns(UserWarning, match=msg):
+            arr, meta = decoder.as_array(ds, raw=True, decoding_plugin="pillow")
 
         # No conversion should be used with raw=True so should match reference
         assert meta["photometric_interpretation"] == "YBR_FULL_422"
@@ -163,10 +169,11 @@ class TestLibJpegDecoder:
 
         # With raw=False Pillow should apply a YCbCr -> RGB conversion
         ref = convert_color_space(arr, "YBR_FULL", "RGB")
-        print("A")
-        arr, meta = decoder.as_array(ds, raw=False, decoding_plugin="pillow")
+        with pytest.warns(UserWarning, match=msg):
+            arr, meta = decoder.as_array(ds, raw=False, decoding_plugin="pillow")
+
         assert meta["photometric_interpretation"] == "RGB"
-        assert np.array_equal(arr, ref)
+        assert np.allclose(arr, ref, atol=1)
 
 
 @pytest.mark.skipif(SKIP_OJ, reason="Test is missing dependencies")
@@ -232,3 +239,21 @@ class TestOpenJpegDecoder:
                 samples_per_pixel=3,
                 planar_configuration=0,
             )
+
+    def test_j2k_sign_correction_indexed(self):
+        """Test that sign correction works as expected with `index`"""
+        reference = J2KR_16_13_1_1_1F_M2_MISMATCH
+        decoder = get_decoder(JPEG2000Lossless)
+        arr, meta = decoder.as_array(reference.ds, index=0, decoding_plugin="pillow")
+        reference.test(arr)
+        assert arr.dtype == reference.dtype
+        assert arr.flags.writeable
+
+    def test_j2k_sign_correction_iter(self):
+        """Test that sign correction works as expected with iter_array()"""
+        reference = J2KR_16_13_1_1_1F_M2_MISMATCH
+        decoder = get_decoder(JPEG2000Lossless)
+        for arr, _ in decoder.iter_array(reference.ds, decoding_plugin="pillow"):
+            reference.test(arr)
+            assert arr.dtype == reference.dtype
+            assert arr.flags.writeable

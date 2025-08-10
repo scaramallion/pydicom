@@ -980,7 +980,9 @@ class TestEncodeRunner_GetFrame:
         assert runner.get_frame(0) == f1
         assert runner.get_frame(1) == f2
         assert runner.get_frame(2) == f3
-        assert runner.get_option("is_bitpacked")
+        assert runner.get_frame_option(0, "is_bitpacked")
+        assert runner.get_frame_option(1, "is_bitpacked")
+        assert runner.get_frame_option(2, "is_bitpacked")
 
         # Repeated with unpacked single bit data
         f1 = unpack_bits(f1, as_array=False)
@@ -997,7 +999,9 @@ class TestEncodeRunner_GetFrame:
 
         # The fact that the data are not bit packed should have been deduced
         # from the length
-        assert not runner.get_option("is_bitpacked")
+        assert not runner.get_frame_option(0, "is_bitpacked")
+        assert not runner.get_frame_option(1, "is_bitpacked")
+        assert not runner.get_frame_option(2, "is_bitpacked")
 
     def test_buffer_08(self):
         """Test get_frame() using [0, 8)-bit samples with N-bit containers."""

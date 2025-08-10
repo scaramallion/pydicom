@@ -40,6 +40,7 @@ def _encode_deflated_frame(src: bytes, runner: EncodeRunner) -> bytes:
     bytes
         A deflate encoded frame.
     """
+    runner.set_frame_option(runner.index, "encoding_plugin", "pydicom")
     # In the case of single bit images, the data must first be bit-packed
     # before being encoded with Deflate
     if runner._test_for("bit_unpacked", runner.index):
@@ -68,6 +69,8 @@ def _encode_rle_frame(src: bytes, runner: EncodeRunner) -> bytes:
     bytes
         An RLE encoded frame.
     """
+    runner.set_frame_option(runner.index, "encoding_plugin", "pydicom")
+
     if runner.get_option("byteorder", "<") == ">":
         raise ValueError("Unsupported option \"byteorder = '>'\"")
 

@@ -1209,6 +1209,55 @@ class TestDecoder_Array:
         assert arr.shape == (10, 64, 64)
         assert meta["number_of_frames"] == 10
 
+    def test_encapsulated_excess_frames_combinations(self):
+        """Test returning excess frame data for the various combinations"""
+        decoder = get_decoder(RLELossless)
+        reference = RLE_16_1_10F
+        ds = dcmread(reference.path)
+
+        # 1 + many
+        ds.NumberOfFrames = 1
+        runner = DecodeRunner(RLELossless)
+        runner.set_source(ds)
+        with pytest.warns(UserWarning, match="10 frames have been found"):
+            arr, meta = decoder.as_array(ds.PixelData, **runner.options)
+
+        assert arr.shape == (10, 64, 64)
+        assert meta["number_of_frames"] == 10
+
+        # 1 + 1
+        ds.NumberOfFrames = 1
+        runner = DecodeRunner(RLELossless)
+        runner.set_source(ds)
+        frames = [x for x in generate_frames(reference.ds.PixelData)]
+        src = encapsulate(frames[:2])
+
+        with pytest.warns(UserWarning, match="2 frames have been found"):
+            arr, meta = decoder.as_array(src, **runner.options)
+
+        assert arr.shape == (2, 64, 64)
+        assert meta["number_of_frames"] == 2
+
+        # many + 1
+        ds.NumberOfFrames = 9
+        runner = DecodeRunner(RLELossless)
+        runner.set_source(ds)
+        with pytest.warns(UserWarning, match="10 frames have been found"):
+            arr, meta = decoder.as_array(ds.PixelData, **runner.options)
+
+        assert arr.shape == (10, 64, 64)
+        assert meta["number_of_frames"] == 10
+
+        # many + many
+        ds.NumberOfFrames = 5
+        runner = DecodeRunner(RLELossless)
+        runner.set_source(ds)
+        with pytest.warns(UserWarning, match="10 frames have been found"):
+            arr, meta = decoder.as_array(ds.PixelData, **runner.options)
+
+        assert arr.shape == (10, 64, 64)
+        assert meta["number_of_frames"] == 10
+
     def test_encapsulated_excess_frames_singlebit(self):
         """Test returning excess frame data"""
         decoder = get_decoder(RLELossless)

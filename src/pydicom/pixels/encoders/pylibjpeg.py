@@ -43,6 +43,8 @@ def is_available(uid: str) -> bool:
 
 def _encode_frame(src: bytes, runner: EncodeRunner) -> bytes | bytearray:
     """Return `src` as an encoded codestream."""
+    runner.set_frame_option(runner.index, "encoding_plugin", "pylibjpeg")
+
     encoder = cast(Encoder, _ENCODERS[runner.transfer_syntax])
 
     tsyntax = runner.transfer_syntax

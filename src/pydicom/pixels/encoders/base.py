@@ -13,7 +13,9 @@ except ImportError:
     pass
 
 from pydicom import config
-from pydicom.pixels.common import Buffer, RunnerBase, CoderBase, RunnerOptions
+from pydicom.pixels.common import (
+    Buffer, RunnerBase, CoderBase, RunnerOptions, FrameOptions
+)
 from pydicom.pixels.utils import get_packed_frame
 from pydicom.uid import (
     UID,
@@ -94,7 +96,10 @@ class EncodeRunner(RunnerBase):
         self._encoders: dict[str, EncodeFunction] = {}
 
         # The frame currently being encoded
-        self._index = 0
+        self._index: int
+        # The frame meta information, keyed to the frame index
+        # Frame indices are not guaranteed to start at 0, but are sequential and ordered
+        self._frame_meta: dict[int, FrameOptions] = {}
 
     def encode(self, index: int | None) -> bytes:
         """Return an encoded frame of pixel data as :class:`bytes`.
@@ -110,7 +115,7 @@ class EncodeRunner(RunnerBase):
         bytes
             The encoded pixel data frame.
         """
-        self._index = index
+        self._index = 0 if index is None else index
 
         failure_messages = []
         for name, func in self._encoders.items():
@@ -343,12 +348,23 @@ class EncodeRunner(RunnerBase):
 
         return "\n".join(s)
 
-    # FIXME
-    def _test_for(self, test: str) -> bool:
+    def _test_for(self, test: str, index: int | None = None) -> bool:
         """Return the result of `test` as :class:`bool`."""
         if test == "gdcm_be_system":
             return sys.byteorder == "big" and self.get_option(
                 "rle_fix_gdcm_big_endian", True
+            )
+
+        if test == "bit_packed":
+            return (
+                self.bits_allocated == 1
+                and self.get_frame_option(index, "is_bitpacked", False)
+            )
+
+        if test == "bit_unpacked":
+            return (
+                self.bits_allocated == 1
+                and not self.get_frame_option(index, "is_bitpacked", False)
             )
 
         raise ValueError(f"Unknown test '{test}'")

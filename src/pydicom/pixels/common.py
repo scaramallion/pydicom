@@ -268,23 +268,28 @@ class CoderBase:
 class FrameOptions(TypedDict, total=False):
     """Options accepted by RunnerBase.set_frame_option()"""
 
-    ## Pixel data description options
+    ## DecodeRunner
+    decoding_plugin: str
+
+    # Pixel data description options
     bits_allocated: int
     photometric_interpretation: str
     planar_configuration: int
 
+    # JPEG-LS and JPEG2000 codestream parameters
+    jls_precision: int
+    j2k_precision: int
+    j2k_is_signed: bool
+
+    ## EncodeRunner
+    encoding_plugin: str
+
+    ## DecodeRunner and EncodeRunner
     # Whether or not single bit data (with Bits Allocated = 1) is passed
     # to/from encoder/decoder functions in a bit-packed format (if True) or
     # unpacked format (if False). The unpacked stores each pixel in a uint8
     # with value 0 or 1. Ignored if BitsAllocated > 1.
     is_bitpacked: bool
-
-    jls_precision: int
-    j2k_precision: int
-    j2k_is_signed: bool
-
-    # The plugin used to decode the frame
-    decoding_plugin: str
 
 
 # TODO: Python 3.11 switch to StrEnum
@@ -336,8 +341,11 @@ class RunnerBase:
         # The source type, one of "Dataset", "Buffer", "Array" or "BinaryIO"
         self._src_type = "UNDEFINED"
 
-        # The frame currently being encoded/decoded - not used for native encoding
+        # The frame currently being encoded/decoded
         self._index: int
+        # The frame meta information, keyed to the frame index
+        # Keys are not guaranteed to start at 0, be sequential, or be ordered
+        self._frame_meta: dict[int, FrameOptions] = {}
 
     @property
     def bits_allocated(self) -> int:
@@ -385,9 +393,13 @@ class RunnerBase:
         """
         return self._opts.get("extended_offsets", None)
 
-    def frame_length(self, unit: str = "bytes") -> int | float:
-        """Return the expected length (in number of bytes or pixels) of each
-        frame of pixel data.
+    def frame_length(self, unit: str = "bytes", index: int | None = None) -> int | float:
+        """Return the expected length (in number of bytes or pixels) for a frame of
+        pixel data.
+
+        .. versionchanged:: 3.1
+
+            Added the `index` parameter.
 
         Parameters
         ----------
@@ -397,6 +409,11 @@ class RunnerBase:
             padding byte. If ``"pixels"`` then returns the expected length of
             the pixel data in terms of the total number of pixels (default
             ``"bytes"``).
+        index : int | None, optional
+            If ``None`` return the length determined using the expected pixel data
+            property values (default), otherwise return the length calculated using
+            the property values determined during encoding or decoding for the frame
+            at `index`.
 
         Returns
         -------
@@ -413,8 +430,21 @@ class RunnerBase:
             return length
 
         # Correct for the number of bytes per pixel
+        bits_allocated = self.bits_allocated
+        if index is not None:
+            bits_allocated = self.get_frame_option(
+                index, "bits_allocated", bits_allocated
+            )
+
         if self.bits_allocated == 1:
-            if self.transfer_syntax.is_encapsulated:
+            # If the frame is unpacked then one pixel is one byte
+            if (
+                index is not None
+                and not self.get_frame_option(index, "is_bitpacked", True)
+            ):
+                return length
+
+            if self.is_encapsulated:
                 # Determine the nearest whole number of bytes needed to contain
                 # 1-bit pixel data. e.g. 10 x 10 1-bit pixels is 100 bits,
                 # which are packed into 12.5 -> 13 bytes
@@ -427,26 +457,27 @@ class RunnerBase:
                 if length.is_integer():
                     length = int(length)
         else:
-            length *= self.bits_allocated // 8
+            length *= bits_allocated // 8
 
         # DICOM Standard, Part 4, Annex C.7.6.3.1.2 - native only
         if (
             self.photometric_interpretation == PhotometricInterpretation.YBR_FULL_422
-            and not self.transfer_syntax.is_encapsulated
+            and not self.is_encapsulated
         ):
             length = length // 3 * 2
 
         return length
 
-    def get_frame_option(self, index: int, name: str, default: Any = None) -> Any:
-        """Return the value of the option `name` for frame `index`.
+    def get_frame_option(self, index: int | None, name: str, default: Any = None) -> Any:
+        """Return the value of the option `name` for all frames or the frame at `index`.
 
         .. versionadded:: 3.1
 
         Parameters
         ----------
-        index : int
-            The index of the frame to get the option for.
+        index : int | None
+            The index of the frame to get the option for, or if ``None`` then the
+            corresponding value for all frames.
         name : str
             The name of the option to get.
         default : Any, optional
@@ -455,13 +486,29 @@ class RunnerBase:
         Returns
         -------
         Any
-            Returns the value for the frame at `index` or the `default`.
+            The option value for the frame at `index` or the `default` if no such
+            frame exists or if no `name` option exists.
 
         Raises
         ------
-        KeyError
-            If no frame at `index` exists.
+        ValueError
+            If `index` is ``None`` and multiple inconsistent values for the option are
+            found.
         """
+        if index is None:
+            values = [v[name] for v in self._frame_meta.values() if name in v]
+            if not values:
+                return default
+
+            if len(set(values)) == 1:
+                return values[0]
+
+            values_str = ", ".join([str(v) for v in sorted(list(set(values)))])
+            raise ValueError(
+                f"Multiple inconsistent inter-frame values found for '{name}': "
+                f"{values_str}"
+            )
+
         if index not in self._frame_meta:
             return default
 
@@ -591,7 +638,7 @@ class RunnerBase:
 
         Parameters
         ----------
-        index : int | None
+        index : int
             The index of the frame to set the option for.
         name : str
             The name of the option to set.
@@ -607,7 +654,7 @@ class RunnerBase:
         if name == "is_bitpacked" and not isinstance(value, bool):
             raise ValueError(
                 f"Invalid 'is_bitpacked' value '{value}' for frame {index}, must be "
-                "a boolean"
+                "boolean"
             )
 
         if name == "planar_configuration" and value not in (0, 1):
@@ -809,9 +856,3 @@ class RunnerOptions(TypedDict, total=False):
     # Optional
     # The Extended Offset Table values
     extended_offsets: tuple[bytes, bytes] | tuple[list[int], list[int]]
-
-    # Whether or not single bit data (with Bits Allocated = 1) is passed
-    # to/from encoder/decoder functions in a bit-packed format (if True) or
-    # unpacked format (if False). The unpacked stores each pixel in a uint8
-    # with value 0 or 1. Ignored if BitsAllocated > 1.
-    # is_bitpacked: bool

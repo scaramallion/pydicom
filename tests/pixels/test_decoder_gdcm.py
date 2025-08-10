@@ -373,6 +373,24 @@ class TestDecoding:
         with pytest.raises(RuntimeError, match=msg):
             ds.pixel_array
 
+    def test_j2k_sign_correction_indexed(self):
+        """Test that sign correction works as expected with `index`"""
+        reference = J2KR_16_13_1_1_1F_M2_MISMATCH
+        decoder = get_decoder(JPEG2000Lossless)
+        arr, _ = decoder.as_array(reference.ds, index=0, decoding_plugin="gdcm")
+        reference.test(arr)
+        assert arr.dtype == reference.dtype
+        assert arr.flags.writeable
+
+    def test_j2k_sign_correction_iter(self):
+        """Test that sign correction works as expected with iter_array()"""
+        reference = J2KR_16_13_1_1_1F_M2_MISMATCH
+        decoder = get_decoder(JPEG2000Lossless)
+        for arr, _ in decoder.iter_array(reference.ds, decoding_plugin="gdcm"):
+            reference.test(arr)
+            assert arr.dtype == reference.dtype
+            assert arr.flags.writeable
+
 
 @pytest.fixture()
 def enable_debugging():

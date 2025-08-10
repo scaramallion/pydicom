@@ -124,7 +124,9 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     if tsyntax in uid.JPEGLSTransferSyntaxes:
         # GDCM always returns JPEG-LS data as color-by-pixel
         runner.set_frame_option(runner.index, "planar_configuration", 0)
-        bits_stored = runner.get_frame_option(runner.index, "jls_precision", bits_stored)
+        bits_stored = runner.get_frame_option(
+            runner.index, "jls_precision", bits_stored
+        )
         if 0 < bits_stored <= 8:
             bits_allocated = 8
         elif 8 < bits_stored <= 16:
@@ -132,7 +134,9 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
 
     if tsyntax in uid.JPEG2000TransferSyntaxes:
         # GDCM pixel container size is based on precision
-        bits_stored = runner.get_frame_option(runner.index, "j2k_precision", bits_stored)
+        bits_stored = runner.get_frame_option(
+            runner.index, "j2k_precision", bits_stored
+        )
         if 0 < bits_stored <= 8:
             bits_allocated = 8
         elif 8 < bits_stored <= 16:

@@ -98,7 +98,9 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:  # type: ignor
         if tsyntax in _OPENJPEG_SYNTAXES:
             # pylibjpeg-openjpeg returns YBR_ICT and YBR_RCT as RGB
             if runner.photometric_interpretation in (PI.YBR_ICT, PI.YBR_RCT):
-                runner.set_frame_option(runner.index, "photometric_interpretation", PI.RGB)
+                runner.set_frame_option(
+                    runner.index, "photometric_interpretation", PI.RGB
+                )
 
             # pylibjpeg-openjpeg pixel container size is based on J2K precision
             precision = runner.get_frame_option(
@@ -128,6 +130,8 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:  # type: ignor
 
         # Signal whether single-bit data is represented in unpacked form
         if runner.bits_allocated == 1:
-            runner.set_frame_option(runner.index, "is_bitpacked", tsyntax == uid.RLELossless)
+            runner.set_frame_option(
+                runner.index, "is_bitpacked", tsyntax == uid.RLELossless
+            )
 
         return frame

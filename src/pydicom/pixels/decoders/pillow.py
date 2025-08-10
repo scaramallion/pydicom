@@ -81,7 +81,9 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
             #    images were transformed into YCbCr color space prior to compression
             if convert_to_rgb:
                 # Pillow will default to applying a YCbCr -> RGB conversion
-                runner.set_frame_option(runner.index, "photometric_interpretation", PI.RGB)
+                runner.set_frame_option(
+                    runner.index, "photometric_interpretation", PI.RGB
+                )
             else:
                 # Use Image.draft() to signal no color transformation
                 image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
@@ -89,7 +91,9 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
             # If the Adobe APP14 marker is present then Pillow uses the value to
             #   determine the color space and defaults to returning RGB
             if convert_to_rgb:
-                runner.set_frame_option(runner.index, "photometric_interpretation", PI.RGB)
+                runner.set_frame_option(
+                    runner.index, "photometric_interpretation", PI.RGB
+                )
             elif "YBR" in cs:
                 image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
 
@@ -98,7 +102,9 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     # JPEG 2000
     # The precision from the J2K codestream is more appropriate because the
     #   decoder will use it to create the output integers
-    precision = runner.get_frame_option(runner.index, "j2k_precision", runner.bits_stored)
+    precision = runner.get_frame_option(
+        runner.index, "j2k_precision", runner.bits_stored
+    )
     # pillow's pixel container size is based on precision
     if 0 < precision <= 8:
         bits_allocated = 8

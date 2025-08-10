@@ -333,8 +333,6 @@ class RunnerBase:
         # Runner options
         self._opts: DecodeOptions | EncodeOptions = {}
         self.set_option("transfer_syntax_uid", tsyntax)
-        # Frame options
-        self._frame_meta: dict[int, dict[str, Any]] = {}
         # Runner options that cannot be deleted, only modified
         self._undeletable: tuple[str, ...] = ("transfer_syntax_uid",)
 
@@ -393,7 +391,9 @@ class RunnerBase:
         """
         return self._opts.get("extended_offsets", None)
 
-    def frame_length(self, unit: str = "bytes", index: int | None = None) -> int | float:
+    def frame_length(
+        self, unit: str = "bytes", index: int | None = None
+    ) -> int | float:
         """Return the expected length (in number of bytes or pixels) for a frame of
         pixel data.
 
@@ -438,9 +438,8 @@ class RunnerBase:
 
         if self.bits_allocated == 1:
             # If the frame is unpacked then one pixel is one byte
-            if (
-                index is not None
-                and not self.get_frame_option(index, "is_bitpacked", True)
+            if index is not None and not self.get_frame_option(
+                index, "is_bitpacked", True
             ):
                 return length
 
@@ -468,7 +467,9 @@ class RunnerBase:
 
         return length
 
-    def get_frame_option(self, index: int | None, name: str, default: Any = None) -> Any:
+    def get_frame_option(
+        self, index: int | None, name: str, default: Any = None
+    ) -> Any:
         """Return the value of the option `name` for all frames or the frame at `index`.
 
         .. versionadded:: 3.1

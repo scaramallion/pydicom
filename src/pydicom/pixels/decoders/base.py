@@ -24,6 +24,7 @@ from pydicom.pixels.common import (
     RunnerOptions,
     CoderBase,
     PhotometricInterpretation as PI,
+    FrameOptions,
 )
 from pydicom.pixels.processing import convert_color_space
 from pydicom.pixels.utils import (
@@ -134,7 +135,7 @@ def _process_color_space(
         A dict containing metadata tracking changes to the ndarray.
 
     """
-    indices = range(runner.number_of_frames) if index is None else (index, )
+    indices = range(runner.number_of_frames) if index is None else (index,)
 
     # If force_ybr then always do conversion (ignore as_rgb)
     as_rgb = runner.get_option("as_rgb", False)
@@ -173,7 +174,7 @@ def _process_color_space(
     # For native all frames are the same PI
     ybr = (PI.YBR_FULL, PI.YBR_FULL_422, PI.YBR_PARTIAL_420, PI.YBR_PARTIAL_422)
     if runner.is_native:
-        if not (runner.photometric_interpretation in ybr and as_rgb) or force_rgb:
+        if not (runner.photometric_interpretation in ybr and as_rgb) and not force_rgb:
             return arr
 
         if not arr.flags.writeable:
@@ -206,7 +207,7 @@ def _process_color_space(
         (
             idx,
             pi := runner.get_frame_option(idx, "photometric_interpretation"),
-            (pi in ybr and as_rgb) or force_rgb
+            (pi in ybr and as_rgb) or force_rgb,
         )
         for idx in indices
     ]
@@ -307,7 +308,9 @@ def _apply_sign_correction(
                 for meta in runner._frame_meta.values()
             ]
         else:
-            signs = [runner.get_frame_option(index, "j2k_is_signed", pixel_representation)]
+            signs = [
+                runner.get_frame_option(index, "j2k_is_signed", pixel_representation)
+            ]
 
         bits_stored = runner.bits_stored
         if index is None:
@@ -406,7 +409,7 @@ class DecodeRunner(RunnerBase):
         self._index: int
         # The frame meta information, keyed to the frame index
         # Frame indices are not guaranteed to start at 0, be sequential, or ordered
-        self._frame_meta: dict[int, dict[str, str | int | bool]] = {}
+        self._frame_meta: dict[int, FrameOptions] = {}
 
         if self.is_encapsulated:
             self.set_option("pixel_keyword", "PixelData")
@@ -492,7 +495,6 @@ class DecodeRunner(RunnerBase):
             The decoded frame of pixel data.
         """
         self._index = index
-        self._frame_set_defaults(index)
 
         # For encapsulated data `self.src` should not be memoryview to avoid
         #   creating a duplicate object in memory by the encapsulation functions
@@ -502,7 +504,7 @@ class DecodeRunner(RunnerBase):
             number_of_frames=self.number_of_frames,
             extended_offsets=self.extended_offsets,
         )
-        self._get_frame_info(src, index)
+        self._frame_set_options(index, src)
 
         return self._decode_frame(src)
 
@@ -565,8 +567,10 @@ class DecodeRunner(RunnerBase):
         if self.pixel_keyword != "PixelData":
             return self.pixel_dtype
 
-        # RunnerBase.set_frame_option() checks that bits allocated is 1 or 8 x N
-        bits_allocated = self.get_frame_option(index, "bits_allocated", self.bits_allocated)
+        # RunnerBase.set_frame_option() checks that bits allocated is 1 or N x 8
+        bits_allocated = self.get_frame_option(
+            index, "bits_allocated", self.bits_allocated
+        )
         itemsize = 1 if bits_allocated == 1 else bits_allocated // 8
 
         dt = self.pixel_dtype
@@ -575,12 +579,37 @@ class DecodeRunner(RunnerBase):
 
         return np.dtype(f"{dt.byteorder}{dt.kind}{itemsize}")
 
-    def _frame_set_defaults(self, index: int) -> None:
-        """Set the default metadata values for the frame at `index`."""
-        names = [
-            "bits_allocated", "photometric_interpretation", "planar_configuration"
-        ]
-        self._frame_meta[index] = {k: v for k, v in self._opts.items() if k in names}
+    def _frame_set_options(self, index: int, src: bytes | None = None) -> None:
+        """Set the initial metadata values for the frame at `index`."""
+        names = ["bits_allocated", "photometric_interpretation", "planar_configuration"]
+        self._frame_meta[index] = {n: self._opts[n] for n in names if n in self._opts}
+
+        if src is None:
+            return
+
+        if self.transfer_syntax in JPEG2000TransferSyntaxes:
+            j2k_info = get_j2k_parameters(src)
+            self.set_frame_option(
+                index,
+                "j2k_is_signed",
+                j2k_info.get("is_signed", self.pixel_representation),
+            )
+            self.set_frame_option(
+                index,
+                "j2k_precision",
+                j2k_info.get("precision", self.bits_stored),
+            )
+        elif self.transfer_syntax in JPEGLSTransferSyntaxes:
+            jls_info = _get_jpg_parameters(src)
+            self.set_frame_option(
+                index,
+                "jls_precision",
+                jls_info.get("precision", self.bits_stored),
+            )
+            self._conform_jpg_colorspace(jls_info, index)
+        elif self.transfer_syntax in JPEGTransferSyntaxes:
+            jpg_info = _get_jpg_parameters(src)
+            self._conform_jpg_colorspace(jpg_info, index)
 
     def get_data(self, src: Buffer | BinaryIO, offset: int, length: int) -> bytes:
         """Return `length` bytes from `src`, starting at `offset`.
@@ -612,32 +641,6 @@ class DecodeRunner(RunnerBase):
         src.seek(file_offset)
         return buffer
 
-    def _get_frame_info(self, src: bytes, index: int) -> None:
-        """Parse a frame's codestream for JPEG-related parameters."""
-        if self.transfer_syntax in JPEG2000TransferSyntaxes:
-            j2k_info = get_j2k_parameters(src)
-            self.set_frame_option(
-                index,
-                "j2k_is_signed",
-                j2k_info.get("is_signed", self.pixel_representation),
-            )
-            self.set_frame_option(
-                index,
-                "j2k_precision",
-                j2k_info.get("precision", self.bits_stored),
-            )
-        elif self.transfer_syntax in JPEGLSTransferSyntaxes:
-            jls_info = _get_jpg_parameters(src)
-            self.set_frame_option(
-                index,
-                "jls_precision",
-                jls_info.get("precision", self.bits_stored),
-            )
-            self._conform_jpg_colorspace(jls_info, index)
-        elif self.transfer_syntax in JPEGTransferSyntaxes:
-            jpg_info = _get_jpg_parameters(src)
-            self._conform_jpg_colorspace(jpg_info, index)
-
     def iter_decode(self) -> Iterator[bytes | bytearray]:
         """Yield decoded frames from the encoded pixel data."""
         if self.is_binary:
@@ -653,8 +656,7 @@ class DecodeRunner(RunnerBase):
         )
         for idx, src in enumerate(encoded_frames):
             self._index = idx
-            self._frame_set_defaults(idx)
-            self._get_frame_info(src, idx)
+            self._frame_set_options(idx, src)
 
             # Try the previously successful decoder first (if available)
             name, func = getattr(self, "_previous", (None, None))
@@ -776,7 +778,7 @@ class DecodeRunner(RunnerBase):
                 f"'index' must be int or None, not '{type(index).__name__}'"
             )
 
-        d = {
+        d: dict[str, str | int] = {
             "columns": self.columns,
             "rows": self.rows,
             "samples_per_pixel": self.samples_per_pixel,
@@ -815,7 +817,7 @@ class DecodeRunner(RunnerBase):
                 None, "planar_configuration", self.planar_configuration
             )
 
-        return cast(dict[str, str | int], d)
+        return d
 
     def process(
         self, arr: "np.ndarray", index: int | None
@@ -1093,15 +1095,13 @@ class DecodeRunner(RunnerBase):
             )
 
         if test == "bit_packed":
-            return (
-                self.bits_allocated == 1
-                and self.get_frame_option(index, "is_bitpacked", False)
+            return self.bits_allocated == 1 and self.get_frame_option(
+                index, "is_bitpacked", False
             )
 
         if test == "bit_unpacked":
-            return (
-                self.bits_allocated == 1
-                and not self.get_frame_option(index, "is_bitpacked", False)
+            return self.bits_allocated == 1 and not self.get_frame_option(
+                index, "is_bitpacked", False
             )
 
         raise ValueError(f"Unknown test '{test}'")
@@ -1335,12 +1335,12 @@ class Decoder(CoderBase):
         if index is not None and index < 0:
             raise ValueError("'index' must be greater than or equal to 0")
 
-        if raw:
-            kwargs["as_rgb"] = False
-
         runner = DecodeRunner(self.UID)
         runner.set_source(src)
         runner.set_options(**kwargs)
+        if raw:
+            runner.set_option("as_rgb", False)
+
         runner.set_decoders(
             cast(
                 dict[str, "DecodeFunction"],
@@ -1408,10 +1408,12 @@ class Decoder(CoderBase):
             # The decoding plugin may alter the frame's bits_allocated to give a
             #   different dtype itemsize, so use frame_dtype()
             # decode() returns bytes | bytearray
-            frame = np.frombuffer(runner.decode(index), dtype=runner.frame_dtype(index))
+            buffer = runner.decode(index)
             if runner._test_for("bit_packed", index):
-                frame = unpack_bits(frame)[:pixels_per_frame]
+                frame = cast("np.ndarray", unpack_bits(buffer))[:pixels_per_frame]
                 runner.set_frame_option(index, "is_bitpacked", False)
+            else:
+                frame = np.frombuffer(buffer, dtype=runner.frame_dtype(index))
 
             # Upscale if the frame's dtype is smaller than the required output dtype
             # The `copy` flag will only create a new array if the frame is read-only
@@ -1436,11 +1438,12 @@ class Decoder(CoderBase):
 
         frame_generator = runner.iter_decode()
         for idx in range(number_of_frames):
-            frame = np.frombuffer(next(frame_generator), dtype=runner.frame_dtype(idx))
-
+            buffer = next(frame_generator)
             if runner._test_for("bit_packed", idx):
-                frame = unpack_bits(frame)[:pixels_per_frame]
+                frame = cast("np.ndarray", unpack_bits(buffer))[:pixels_per_frame]
                 runner.set_frame_option(idx, "is_bitpacked", False)
+            else:
+                frame = np.frombuffer(buffer, dtype=runner.frame_dtype(idx))
 
             dst = None if number_of_frames == 1 else idx
             arr[dst] = runner.reshape(frame, idx)
@@ -1456,10 +1459,11 @@ class Decoder(CoderBase):
             idx += 1  # Continuing on from above
             if len(buffer) == runner.frame_length(unit="bytes", index=idx):
                 if runner._test_for("bit_packed", idx):
-                    buffer = unpack_bits(buffer)[:pixels_per_frame]
+                    frame = cast("np.ndarray", unpack_bits(buffer))[:pixels_per_frame]
                     runner.set_frame_option(idx, "is_bitpacked", False)
+                else:
+                    frame = np.frombuffer(buffer, runner.frame_dtype(idx))
 
-                frame = np.frombuffer(buffer, runner.frame_dtype(idx))
                 # The frame dtype is reconciled to pixel_dtype in concatenate()
                 runner.set_frame_option(idx, "bits_allocated", runner.bits_allocated)
                 frame = runner.reshape(frame, idx)
@@ -1506,9 +1510,9 @@ class Decoder(CoderBase):
         length_pixels = int(runner.frame_length(unit="pixels"))
         dtype = runner.pixel_dtype
 
-        indices = (index, ) if index is not None else range(runner.number_of_frames)
+        indices = (index,) if index is not None else range(runner.number_of_frames)
         for idx in indices:
-            runner._frame_set_defaults(idx)
+            runner._frame_set_options(idx)
 
         src: memoryview | BinaryIO
         if runner.is_dataset or runner.is_buffer:
@@ -1759,7 +1763,7 @@ class Decoder(CoderBase):
         else:
             buffer = self._as_buffer_encapsulated(runner, index)
 
-        indices = (index, ) if index is not None else range(runner.number_of_frames)
+        indices = (index,) if index is not None else range(runner.number_of_frames)
         meta = {idx: runner.pixel_properties(idx) for idx in indices}
 
         return buffer, meta
@@ -1905,9 +1909,9 @@ class Decoder(CoderBase):
         """
         length_bytes = runner.frame_length(unit="bytes")
 
-        indices = (index, ) if index is not None else range(runner.number_of_frames)
+        indices = (index,) if index is not None else range(runner.number_of_frames)
         for idx in indices:
-            runner._frame_set_defaults(idx)
+            runner._frame_set_options(idx)
 
         src: Buffer | BinaryIO
         if runner.is_dataset or runner.is_buffer:
@@ -2094,12 +2098,12 @@ class Decoder(CoderBase):
                 "NumPy is required when converting pixel data to an ndarray"
             )
 
-        if raw:
-            kwargs["as_rgb"] = False
-
         runner = DecodeRunner(self.UID)
         runner.set_source(src)
         runner.set_options(**kwargs)
+        if raw:
+            runner.set_option("as_rgb", False)
+
         runner.set_decoders(
             cast(
                 dict[str, "DecodeFunction"],
@@ -2128,12 +2132,12 @@ class Decoder(CoderBase):
             pixels_per_frame = cast(int, runner.frame_length("pixels"))
             # iter_decode() yields bytes | bytearray and may yield more frames
             #   than number_of_frames if excess frames exist
-            for idx, frame in enumerate(runner.iter_decode()):
+            for idx, buffer in enumerate(runner.iter_decode()):
                 if runner._test_for("bit_packed", idx):
-                    arr = unpack_bits(frame)[:pixels_per_frame]
+                    arr = cast("np.ndarray", unpack_bits(buffer)[:pixels_per_frame])
                     runner.set_frame_option(idx, "is_bitpacked", False)
                 else:
-                    arr = np.frombuffer(frame, dtype=runner.frame_dtype(idx))
+                    arr = np.frombuffer(buffer, dtype=runner.frame_dtype(idx))
 
                 # The `copy` arg will only create a new array if the frame is read-only
                 #   or if the frame's dtype doesn't match the output dtype

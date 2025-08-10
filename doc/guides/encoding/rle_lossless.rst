@@ -20,18 +20,10 @@ syntax. For an explanation of each parameter and its relationship with the
 | *Samples   | *Photometric    | *Pixel          | *Bits      | *Bits   |
 | per Pixel* | Interpretation* | Representation* | Allocated* | Stored* |
 +============+=================+=================+============+=========+
-<<<<<<< HEAD
-| 1          | | MONOCHROME1   | 0 or 1          | 8 or 16    | 1 to 16 |
+| 1          | | MONOCHROME1   | 0 or 1          | 1, 8 or 16 | 1 to 16 |
 |            | | MONOCHROME2   |                 |            |         |
 |            +-----------------+-----------------+------------+---------+
 |            | PALETTE COLOR   | 0               | 8 or 16    | 1 to 16 |
-=======
-| 1          | MONOCHROME1     | 0 or 1          | 1, 8 or 16 | 1 to 16 |
-|            +-----------------+                 |            |         |
-|            | MONOCHROME2     |                 |            |         |
-|            +-----------------+-----------------+            |         |
-|            | PALETTE COLOR   | 0               |            |         |
->>>>>>> 024815540ede6bae53acc8a1daf09785cb582c91
 +------------+-----------------+-----------------+------------+---------+
 | 3          | RGB             | 0               | 8 or 16    | 1 to 16 |
 |            +-----------------+-----------------+------------+---------+

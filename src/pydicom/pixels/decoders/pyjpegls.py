@@ -30,7 +30,7 @@ def is_available(uid: str) -> bool:
 
 def _decode_frame(src: bytes, runner: DecodeRunner) -> bytearray:
     """Return the decoded image data in `src` as a :class:`bytearray`."""
-    runner.set_frame_option(runner.index, "decoding_plugin", "pydicom")
+    runner.set_frame_option(runner.index, "decoding_plugin", "pyjpegls")
 
     buffer, info = jpeg_ls.decode_pixel_data(src)
     # Interleave mode 0 is colour-by-plane, 1 and 2 are colour-by-pixel

@@ -14,7 +14,11 @@ except ImportError:
 
 from pydicom import config
 from pydicom.pixels.common import (
-    Buffer, RunnerBase, CoderBase, RunnerOptions, FrameOptions
+    Buffer,
+    RunnerBase,
+    CoderBase,
+    RunnerOptions,
+    FrameOptions,
 )
 from pydicom.pixels.utils import get_packed_frame
 from pydicom.uid import (
@@ -101,6 +105,7 @@ class EncodeRunner(RunnerBase):
         # Frame indices are not guaranteed to start at 0, but are sequential and ordered
         self._frame_meta: dict[int, FrameOptions] = {}
 
+    # FIXME: self._index set correctly?
     def encode(self, index: int | None) -> bytes:
         """Return an encoded frame of pixel data as :class:`bytes`.
 
@@ -200,6 +205,7 @@ class EncodeRunner(RunnerBase):
             if self._src_type == "Dataset" or (
                 self._src_type == "Buffer" and len(self._src) < total_pixels
             ):
+                # FIXME: index may be None here
                 # Pass to the encoder in a bitpacked form
                 self.set_frame_option(index, "is_bitpacked", True)
                 return get_packed_frame(
@@ -210,6 +216,7 @@ class EncodeRunner(RunnerBase):
                 )
 
             # Array or non-bitpacked buffer
+            # FIXME: index may be None here
             self.set_frame_option(index, "is_bitpacked", False)
             bytes_per_frame = cast(int, self.frame_length(unit="pixels"))
         else:
@@ -356,15 +363,13 @@ class EncodeRunner(RunnerBase):
             )
 
         if test == "bit_packed":
-            return (
-                self.bits_allocated == 1
-                and self.get_frame_option(index, "is_bitpacked", False)
+            return self.bits_allocated == 1 and self.get_frame_option(
+                index, "is_bitpacked", False
             )
 
         if test == "bit_unpacked":
-            return (
-                self.bits_allocated == 1
-                and not self.get_frame_option(index, "is_bitpacked", False)
+            return self.bits_allocated == 1 and not self.get_frame_option(
+                index, "is_bitpacked", False
             )
 
         raise ValueError(f"Unknown test '{test}'")

@@ -61,7 +61,6 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
     bits_allocated = runner.bits_allocated
 
     # libjpeg only supports 8-bit JPEG Extended (can be 8 or 12 in the JPEG standard)
-    # libjpeg-turbo supports up to
     if tsyntax == uid.JPEGExtended12Bit and runner.bits_stored != 8:
         raise NotImplementedError(
             "Pillow does not support 'JPEG Extended' for samples with 12-bit precision"

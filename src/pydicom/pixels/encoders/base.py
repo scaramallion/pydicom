@@ -105,7 +105,6 @@ class EncodeRunner(RunnerBase):
         # Frame indices are not guaranteed to start at 0, but are sequential and ordered
         self._frame_meta: dict[int, FrameOptions] = {}
 
-    # FIXME: self._index set correctly?
     def encode(self, index: int | None) -> bytes:
         """Return an encoded frame of pixel data as :class:`bytes`.
 
@@ -184,10 +183,8 @@ class EncodeRunner(RunnerBase):
         ):
             arr = arr.transpose(2, 0, 1)
 
-        if self.bits_allocated == 1:
-            # Encoder.encode() and Encoder.iter_encode() expect an unpacked array
-            index = 0 if index is None else index
-            self.set_frame_option(index, "bits_allocated", 8)
+        index = 0 if index is None else index
+        self.set_frame_option(index, "bits_allocated", 8 * itemsize)
 
         return cast(bytes, arr.tobytes())
 
@@ -203,11 +200,11 @@ class EncodeRunner(RunnerBase):
         #    8 < precision <= 16: a 16-bit container (short)
         #   16 < precision <= 32: a 32-bit container (int/long)
         #   32 < precision <= 64: a 64-bit container (long long)
+        index = 0 if index is None else index
         if self.bits_allocated == 1:
             # Data *may* be bit-packed, use length and source type to infer
             total_pixels = self.frame_length(unit="pixels") * self.number_of_frames
 
-            index = 0 if index is None else index
             if self._src_type == "Dataset" or (
                 self._src_type == "Buffer" and len(self._src) < total_pixels
             ):
@@ -220,13 +217,12 @@ class EncodeRunner(RunnerBase):
                     pad=False,
                 )
 
-            # Array or non-bitpacked buffer
-            self.set_frame_option(index, "bits_allocated", 8)
+            # Non-bitpacked buffer
             bytes_per_frame = cast(int, self.frame_length(unit="pixels"))
         else:
             bytes_per_frame = cast(int, self.frame_length(unit="bytes"))
 
-        start = 0 if index is None else index * bytes_per_frame
+        start = index * bytes_per_frame
         src = cast(bytes, self.src[start : start + bytes_per_frame])
 
         # Resize the data to fit the appropriate container
@@ -237,10 +233,12 @@ class EncodeRunner(RunnerBase):
         if self.bits_stored <= 8:
             # If not 1 byte/px then must be 2, 3, 4, 5, 6, 7 or 8
             #   but only the first byte is relevant
+            self.set_frame_option(index, "bits_allocated", 8)
             return src if bytes_per_pixel == 1 else src[::bytes_per_pixel]
 
         # 2 bytes/px actual
         if 8 < self.bits_stored <= 16:
+            self.set_frame_option(index, "bits_allocated", 16)
             if bytes_per_pixel == 2:
                 return src
 
@@ -253,6 +251,7 @@ class EncodeRunner(RunnerBase):
 
         # 3 or 4 bytes/px actual
         if 16 < self.bits_stored <= 32:
+            self.set_frame_option(index, "bits_allocated", 32)
             if bytes_per_pixel == 4:
                 return src
 
@@ -269,6 +268,7 @@ class EncodeRunner(RunnerBase):
 
         # 32 < bits_stored <= 64 (maximum allowed)
         # 5, 6, 7 or 8 bytes/px actual
+        self.set_frame_option(index, "bits_allocated", 64)
         if bytes_per_pixel == 8:
             return src
 

@@ -45,7 +45,7 @@ def _encode_deflated_frame(src: bytes, runner: EncodeRunner) -> bytes:
     # before being encoded with Deflate
     if runner._test_for("bit_unpacked", runner.index):
         src = pack_bits(src, pad=False)
-        runner.set_frame_option(runner.index, "is_bitpacked", True)
+        runner.set_frame_option(runner.index, "bits_allocated", 1)
 
     # TODO: Python 3.11 switch to using zlib.compress() instead
     enc = zlib.compressobj(wbits=-zlib.MAX_WBITS)
@@ -78,7 +78,7 @@ def _encode_rle_frame(src: bytes, runner: EncodeRunner) -> bytes:
     # before being encoded with RLE
     if runner._test_for("bit_unpacked", runner.index):
         src = pack_bits(src, pad=False)
-        runner.set_frame_option(runner.index, "is_bitpacked", True)
+        runner.set_frame_option(runner.index, "bits_allocated", 1)
 
     bytes_allocated = math.ceil(runner.bits_allocated / 8)
 

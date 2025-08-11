@@ -180,6 +180,6 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
 
     # Signal that single-bit data is represented in unpacked form
     if runner.bits_allocated == 1:
-        runner.set_frame_option(runner.index, "is_bitpacked", False)
+        runner.set_frame_option(runner.index, "bits_allocated", 8)
 
     return frame

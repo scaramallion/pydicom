@@ -2285,16 +2285,16 @@ def get_packed_frame(
         # bitwise operations to avoid the need to unpack all the pixels
         bit_offset = pixel_start % 8
 
-        frame_bytes = np.frombuffer(src[byte_start:byte_end], dtype=np.uint8)
+        frame_arr = np.frombuffer(src[byte_start:byte_end], dtype=np.uint8)
         n_output_bytes = math.ceil(frame_length / 8)
 
         # Start with the bytes from which the least significant bits of the output
         # are drawn
-        shifted = np.right_shift(frame_bytes[:n_output_bytes], bit_offset)
+        shifted = np.right_shift(frame_arr[:n_output_bytes], bit_offset)
 
         # Array of bytes from which the most significant bits of the output are
         # drawn
-        ms_bytes = np.left_shift(frame_bytes[1:], 8 - bit_offset)
+        ms_bytes = np.left_shift(frame_arr[1:], 8 - bit_offset)
 
         # Combine the two sets of bytes
         np.bitwise_or(shifted[: len(ms_bytes)], ms_bytes, out=shifted[: len(ms_bytes)])

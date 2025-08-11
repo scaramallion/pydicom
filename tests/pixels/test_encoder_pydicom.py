@@ -156,7 +156,7 @@ class TestEncodeRLEFrame:
         }
         runner = EncodeRunner(RLELossless)
         runner.set_options(**kwargs)
-        runner.set_frame_option(0, "is_bitpacked", pass_as_packed)
+        runner.set_frame_option(0, "bits_allocated", 1 if pass_as_packed else 8)
         runner._index = 0
 
         if pass_as_packed:
@@ -579,7 +579,7 @@ class TestEncodeDeflatedFrame:
         }
         runner = EncodeRunner(DeflatedImageFrameCompression)
         runner.set_options(**kwargs)
-        runner.set_frame_option(0, "is_bitpacked", pass_as_packed)
+        runner.set_frame_option(0, "bits_allocated", 1 if pass_as_packed else 8)
         runner._index = 0
 
         input_pixel_data = ds.PixelData

@@ -142,7 +142,7 @@ class EncodeRunner(RunnerBase):
         Parameters
         ----------
         index : int | None
-            If the pixel data only has one from then use ``None``, otherwise
+            If the pixel data only has one frame then use ``None``, otherwise
             `index` is the index of the frame to be returned.
         """
         if self.is_array:
@@ -184,6 +184,11 @@ class EncodeRunner(RunnerBase):
         ):
             arr = arr.transpose(2, 0, 1)
 
+        if self.bits_allocated == 1:
+            # Encoder.encode() and Encoder.iter_encode() expect an unpacked array
+            index = 0 if index is None else index
+            self.set_frame_option(index, "bits_allocated", 8)
+
         return cast(bytes, arr.tobytes())
 
     def _get_frame_buffer(self, index: int | None) -> bytes | bytearray:
@@ -202,22 +207,21 @@ class EncodeRunner(RunnerBase):
             # Data *may* be bit-packed, use length and source type to infer
             total_pixels = self.frame_length(unit="pixels") * self.number_of_frames
 
+            index = 0 if index is None else index
             if self._src_type == "Dataset" or (
                 self._src_type == "Buffer" and len(self._src) < total_pixels
             ):
-                # FIXME: index may be None here
                 # Pass to the encoder in a bitpacked form
-                self.set_frame_option(index, "is_bitpacked", True)
+                self.set_frame_option(index, "bits_allocated", 1)
                 return get_packed_frame(
                     src=cast(bytes, self._src),
-                    index=0 if index is None else index,
+                    index=index,
                     frame_length=cast(int, self.frame_length(unit="pixels")),
                     pad=False,
                 )
 
             # Array or non-bitpacked buffer
-            # FIXME: index may be None here
-            self.set_frame_option(index, "is_bitpacked", False)
+            self.set_frame_option(index, "bits_allocated", 8)
             bytes_per_frame = cast(int, self.frame_length(unit="pixels"))
         else:
             bytes_per_frame = cast(int, self.frame_length(unit="bytes"))
@@ -363,13 +367,15 @@ class EncodeRunner(RunnerBase):
             )
 
         if test == "bit_packed":
-            return self.bits_allocated == 1 and self.get_frame_option(
-                index, "is_bitpacked", False
+            return (
+                self.bits_allocated == 1
+                and self.get_frame_option(index, "bits_allocated", 8) == 1
             )
 
         if test == "bit_unpacked":
-            return self.bits_allocated == 1 and not self.get_frame_option(
-                index, "is_bitpacked", False
+            return (
+                self.bits_allocated == 1
+                and self.get_frame_option(index, "bits_allocated", 1) != 1
             )
 
         raise ValueError(f"Unknown test '{test}'")

@@ -272,7 +272,7 @@ class FrameOptions(TypedDict, total=False):
     decoding_plugin: str
 
     # Pixel data description options
-    bits_allocated: int
+    bits_allocated: int  # bits_allocated 1 indicates the frame data is bit-packed
     photometric_interpretation: str
     planar_configuration: int
 
@@ -283,13 +283,6 @@ class FrameOptions(TypedDict, total=False):
 
     ## EncodeRunner
     encoding_plugin: str
-
-    ## DecodeRunner and EncodeRunner
-    # Whether or not single bit data (with Bits Allocated = 1) is passed
-    # to/from encoder/decoder functions in a bit-packed format (if True) or
-    # unpacked format (if False). The unpacked stores each pixel in a uint8
-    # with value 0 or 1. Ignored if BitsAllocated > 1.
-    is_bitpacked: bool
 
 
 # TODO: Python 3.11 switch to StrEnum
@@ -438,8 +431,9 @@ class RunnerBase:
 
         if self.bits_allocated == 1:
             # If the frame is unpacked then one pixel is one byte
-            if index is not None and not self.get_frame_option(
-                index, "is_bitpacked", True
+            if (
+                index is not None
+                and self.get_frame_option(index, "bits_allocated", 1) != 1
             ):
                 return length
 
@@ -497,7 +491,11 @@ class RunnerBase:
             found.
         """
         if index is None:
-            values = [v[name] for v in self._frame_meta.values() if name in v]
+            values = [
+                v[name]  # type: ignore[literal-required]
+                for v in self._frame_meta.values()
+                if name in v
+            ]
             if not values:
                 return default
 
@@ -673,7 +671,7 @@ class RunnerBase:
                 pass
 
         opts = self._frame_meta.setdefault(index, {})
-        opts[name] = value
+        opts[name] = value  # type: ignore[literal-required]
 
     def set_option(self, name: str, value: Any) -> None:
         """Set a runner option.
@@ -703,6 +701,7 @@ class RunnerBase:
 
         self._opts[name] = value  # type: ignore[literal-required]
 
+    # TODO: Python 3.11 use typing.Unpack
     def set_options(self, **kwargs: "DecodeOptions | EncodeOptions") -> None:
         """Set multiple runner options.
 

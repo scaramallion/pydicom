@@ -8,36 +8,11 @@ Changes
 * Prefer using pylibjpeg over GDCM when encoding *RLE Lossless*.
 * Prefer using Pillow when decoding *JPEG Baseline 8-bit* and *JPEG Extended 12-bit*
 * Improvements made to communications with the plugins when decoding and encoding pixel
-  data and correcting for inter-frame decoding variations in multi-frame datasets:
-
-  .. currentmodule:: pydicom.pixels.decoders.base
-
-  * Added :attr:`DecodeRunner.index<DecodeRunner.index>`,
-    :meth:`DecodeRunner.get_frame_option<DecodeRunner.get_frame_option>`,
-    :meth:`DecodeRunner.set_frame_option<DecodeRunner.set_frame_option>`,
-    and :meth:`DecodeRunner.frame_dtype<DecodeRunner.frame_dtype>`.
-  * Added `index` parameters to
-    :meth:`DecodeRunner.frame_length<DecodeRunner.frame_length>`,
-    :meth:`DecodeRunner.pixel_properties<DecodeRunner.pixel_properties>`,
-    :meth:`DecodeRunner.process<DecodeRunner.process>` and
-    :meth:`DecodeRunner.reshape<DecodeRunner.reshape>`.
-
-  .. currentmodule:: pydicom.pixels.encoders.base
-
-  * Added :attr:`EncodeRunner.index<EncodeRunner.index>`,
-    :meth:`EncodeRunner.get_frame_option<EncodeRunner.get_frame_option>` and
-    :meth:`EncodeRunner.set_frame_option<EncodeRunner.set_frame_option>`.
-  * Added an `index` parameter to
-    :meth:`EncodeRunner.frame_length<EncodeRunner.frame_length>`
-
-.. currentmodule:: pydicom.pixels.decoders.base
-
-* The metadata returned by :meth:`Decoder.as_buffer<Decoder.as_buffer>` is now a
-  ``dict`` containing the per-frame metadata to help account for inter-frame variations
-  in frame properties when decoding.
-
-
-.. currentmodule:: pydicom
+  data and correcting for inter-frame decoding variations in multi-frame datasets (:pr:``).
+* The metadata returned by :meth:`Decoder.as_buffer
+  <pydicom.pixels.decoders.base.Decoder.as_buffer>` is now a ``dict`` containing the
+  per-frame metadata to help account for inter-frame variations in frame properties
+  when decoding.
 
 Fixes
 -----
@@ -95,10 +70,3 @@ Enhancements
   :func:`~pydicom.pixels.convert_color_space` where applicable (:issue:`2228`)
 * Take the color space information from an Adobe APP14 marker into account when decoding
   pixel data for JPEG transfer syntaxes.
-
-Deprecations
-------------
-
-* The `as_frame` parameter for :meth:`DecodeRunner.pixel_properties
-  <DecodeRunner.pixel_properties>` and :meth:`DecodeRunner.reshape<DecodeRunner.reshape>`
-  will be removed in v4.0, use the `index` parameter instead.

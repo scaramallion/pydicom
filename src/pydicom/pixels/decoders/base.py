@@ -134,8 +134,8 @@ def _process_color_space(
         If ``None`` then `arr` contains the entire pixel data (single or multi-framed),
         otherwise this is the `index` to the single frame being converted.
     changes : dict[str, str | int]
-        A dict containing metadata tracking changes to the ndarray.
-
+        A dict containing metadata tracking changes applicable to the entire pixel
+        data, will only be updated if `index` is ``None``.
     """
     indices = range(runner.number_of_frames) if index is None else (index,)
 
@@ -396,7 +396,6 @@ class DecodeRunner(RunnerBase):
         """
         self._src: Buffer | BinaryIO
         self._src_type: str
-        # Native and encapsulated: configuration options and initial metadata values
         self._opts: DecodeOptions = {
             "transfer_syntax_uid": tsyntax,
             "as_rgb": True,

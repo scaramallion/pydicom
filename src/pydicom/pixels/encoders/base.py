@@ -359,7 +359,7 @@ class EncodeRunner(RunnerBase):
 
         return "\n".join(s)
 
-    def _test_for(self, test: str, index: int | None = None) -> bool:
+    def _test_for(self, test: str) -> bool:
         """Return the result of `test` as :class:`bool`."""
         if test == "gdcm_be_system":
             return sys.byteorder == "big" and self.get_option(

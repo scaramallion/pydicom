@@ -488,8 +488,14 @@ class TestRunnerBase:
 
         runner.set_frame_option(0, "photometric_interpretation", PI.RGB)
         assert runner._frame_meta[0]["photometric_interpretation"] == PI.RGB
+        runner.set_frame_option(0, "photometric_interpretation", "PALETTE COLOR")
+        pi = runner._frame_meta[0]["photometric_interpretation"]
+        assert isinstance(pi, PI)
+        assert pi == PI.PALETTE_COLOR
         runner.set_frame_option(0, "photometric_interpretation", "FOO")
-        assert runner._frame_meta[0]["photometric_interpretation"] == "FOO"
+        pi = runner._frame_meta[0]["photometric_interpretation"]
+        assert not isinstance(pi, PI)
+        assert pi == "FOO"
 
     def test_get_frame_option(self):
         """Tests for get_frame_option()"""

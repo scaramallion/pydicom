@@ -335,7 +335,7 @@ class RunnerBase:
         # The frame currently being encoded/decoded
         self._index: int
         # The frame meta information, keyed to the frame index
-        # Keys are not guaranteed to start at 0, be sequential, or be ordered
+        # Keys are not guaranteed to start at 0
         self._frame_meta: dict[int, FrameOptions] = {}
 
     @property
@@ -644,7 +644,7 @@ class RunnerBase:
         value : Any
             The value of the option.
         """
-        if name == "bits_allocated" and (not 1 <= value or (value != 1 and value % 8)):
+        if name == "bits_allocated" and ((value != 1 and value % 8) or value == 0):
             raise ValueError(
                 f"Invalid 'bits_allocated' value '{value}' for frame {index}, must "
                 "be 1 or a multiple of 8"
@@ -657,11 +657,9 @@ class RunnerBase:
             )
 
         if name == "photometric_interpretation":
-            if value == "PALETTE COLOR":
-                value = PhotometricInterpretation.PALETTE_COLOR
             try:
-                value = PhotometricInterpretation[value]
-            except KeyError:
+                value = PhotometricInterpretation(value)
+            except ValueError:
                 pass
 
         opts = self._frame_meta.setdefault(index, {})
@@ -686,11 +684,9 @@ class RunnerBase:
                 )
                 value = 1
         elif name == "photometric_interpretation":
-            if value == "PALETTE COLOR":
-                value = PhotometricInterpretation.PALETTE_COLOR
             try:
-                value = PhotometricInterpretation[value]
-            except KeyError:
+                value = PhotometricInterpretation(value)
+            except ValueError:
                 pass
 
         self._opts[name] = value  # type: ignore[literal-required]

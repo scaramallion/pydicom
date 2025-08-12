@@ -644,16 +644,10 @@ class RunnerBase:
         value : Any
             The value of the option.
         """
-        if name == "bits_allocated" and value != 1 and value % 8 != 0:
+        if name == "bits_allocated" and (not 1 <= value or (value != 1 and value % 8)):
             raise ValueError(
                 f"Invalid 'bits_allocated' value '{value}' for frame {index}, must "
                 "be 1 or a multiple of 8"
-            )
-
-        if name == "is_bitpacked" and not isinstance(value, bool):
-            raise ValueError(
-                f"Invalid 'is_bitpacked' value '{value}' for frame {index}, must be "
-                "boolean"
             )
 
         if name == "planar_configuration" and value not in (0, 1):

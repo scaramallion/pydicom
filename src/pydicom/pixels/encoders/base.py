@@ -366,18 +366,6 @@ class EncodeRunner(RunnerBase):
                 "rle_fix_gdcm_big_endian", True
             )
 
-        if test == "bit_packed":
-            return (
-                self.bits_allocated == 1
-                and self.get_frame_option(index, "bits_allocated", 8) == 1
-            )
-
-        if test == "bit_unpacked":
-            return (
-                self.bits_allocated == 1
-                and self.get_frame_option(index, "bits_allocated", 1) != 1
-            )
-
         raise ValueError(f"Unknown test '{test}'")
 
     def validate(self) -> None:

@@ -249,26 +249,6 @@ class TestLibJpegDecoder:
         np.right_shift(arr, 1, out=arr)
         JLSL_16_15_1_1_1F.test(arr[1], plugin="pylibjpeg")
 
-    @pytest.mark.parametrize("path", [J2KR_1_1_3F.path, J2KR_1_1_3F_NONALIGNED.path])
-    def test_j2k_singlebit_as_buffer(self, path):
-        """Test retrieving buffers from single bit J2K."""
-        ds = dcmread(path)
-        arr = ds.pixel_array
-        n_pixels_per_frame = ds.Rows * ds.Columns
-        n_pixels = n_pixels_per_frame * ds.NumberOfFrames
-
-        decoder = get_decoder(JPEG2000Lossless)
-        buffer, meta = decoder.as_buffer(ds, decoding_plugin="pylibjpeg")
-        unpacked_buffer = unpack_bits(buffer)[:n_pixels]
-        assert np.array_equal(unpacked_buffer, arr.flatten())
-
-        for index in range(ds.NumberOfFrames):
-            buffer, meta = decoder.as_buffer(
-                ds, decoding_plugin="pylibjpeg", index=index
-            )
-            unpacked_buffer = unpack_bits(buffer)[:n_pixels_per_frame]
-            assert np.array_equal(unpacked_buffer, arr[index].flatten())
-
     def test_iter_array_ybr_to_rgb(self):
         """Test conversion from YBR to RGB for multi-framed data."""
         ds = JPGB_08_08_3_0_120F_YBR_FULL_422.ds
@@ -395,6 +375,63 @@ class TestOpenJpegDecoder:
             reference.test(arr)
             assert arr.dtype == reference.dtype
             assert arr.flags.writeable
+
+    @pytest.mark.parametrize("path", [J2KR_1_1_3F.path, J2KR_1_1_3F_NONALIGNED.path])
+    def test_j2k_singlebit_as_buffer(self, path):
+        """Test retrieving buffers from single bit J2K."""
+        ds = dcmread(path)
+        arr = ds.pixel_array
+        n_pixels_per_frame = ds.Rows * ds.Columns
+        n_pixels = n_pixels_per_frame * ds.NumberOfFrames
+
+        decoder = get_decoder(JPEG2000Lossless)
+        buffer, meta = decoder.as_buffer(ds, decoding_plugin="pylibjpeg")
+        unpacked_buffer = unpack_bits(buffer)[:n_pixels]
+        assert np.array_equal(unpacked_buffer, arr.flatten())
+
+        for index in range(ds.NumberOfFrames):
+            buffer, meta = decoder.as_buffer(
+                ds, decoding_plugin="pylibjpeg", index=index
+            )
+            unpacked_buffer = unpack_bits(buffer)[:n_pixels_per_frame]
+            assert np.array_equal(unpacked_buffer, arr[index].flatten())
+
+    @pytest.mark.parametrize("path", [J2KR_1_1_3F.path, J2KR_1_1_3F_NONALIGNED.path])
+    def test_j2k_singlebit_iter_buffer(self, path):
+        """Test retrieving buffers from single bit J2K."""
+        ds = dcmread(path)
+        arr = ds.pixel_array
+        nr_pixels = ds.Rows * ds.Columns
+
+        decoder = get_decoder(JPEG2000Lossless)
+        generator = decoder.iter_buffer(ds, decoding_plugin="pylibjpeg")
+        for idx, (buffer, meta) in enumerate(generator):
+            unpacked_buffer = unpack_bits(buffer)[:nr_pixels]
+            assert np.array_equal(unpacked_buffer, arr[idx].flatten())
+
+    def test_j2k_singlebit_excess(self):
+        """Test retrieving buffers from single bit J2K with excess frames."""
+        ds = dcmread(J2KR_1_1_3F.path)
+        ds.NumberOfFrames = 2
+        decoder = get_decoder(JPEG2000Lossless)
+        msg = (
+            "3 frames have been found in the encapsulated pixel data, which is "
+            r"larger than the given \(0028,0008\) 'Number of Frames' value of 2. "
+            "The returned data will include these extra frames and if it's correct "
+            "then you should update 'Number of Frames' accordingly, otherwise pass "
+            "'allow_excess_frames=False' to return only the first 2 frames."
+        )
+        with pytest.warns(UserWarning, match=msg):
+            buffer, meta = decoder.as_buffer(ds, decoding_plugin="pylibjpeg")
+
+        assert len(buffer) == (3 * 512 * 512) // 8
+        assert len(meta) == 3
+
+        buffer, meta = decoder.as_buffer(
+            ds, allow_excess_frames=False, decoding_plugin="pylibjpeg"
+        )
+        assert len(buffer) == (2 * 512 * 512) // 8
+        assert len(meta) == 2
 
 
 @pytest.mark.skipif(SKIP_RLE, reason="Test is missing dependencies")

@@ -19,7 +19,7 @@ from pydicom.pixels import get_decoder
 from pydicom.pixels.decoders import gdcm
 from pydicom.pixels.decoders.gdcm import _decode_frame
 from pydicom.pixels.decoders.base import DecodeRunner
-from pydicom.pixels.utils import _passes_version_check
+from pydicom.pixels.utils import _passes_version_check, unpack_bits
 from pydicom.uid import (
     JPEGBaseline8Bit,
     JPEGExtended12Bit,
@@ -41,6 +41,8 @@ from .pixels_reference import (
     JPGB_08_08_3_0_1F_RGB,  # has RGB component IDs
     JPGB_08_08_3_0_1F_YBR_FULL,  # has JFIF APP marker
     RLE_32_1_1F,
+    J2KR_1_1_3F,
+    J2KR_1_1_3F_NONALIGNED,
 )
 
 
@@ -390,6 +392,24 @@ class TestDecoding:
             reference.test(arr)
             assert arr.dtype == reference.dtype
             assert arr.flags.writeable
+
+    @pytest.mark.parametrize("path", [J2KR_1_1_3F.path, J2KR_1_1_3F_NONALIGNED.path])
+    def test_j2k_singlebit_as_buffer(self, path):
+        """Test retrieving buffers from single bit J2K."""
+        ds = dcmread(path)
+        arr = ds.pixel_array
+        n_pixels_per_frame = ds.Rows * ds.Columns
+        n_pixels = n_pixels_per_frame * ds.NumberOfFrames
+
+        decoder = get_decoder(JPEG2000Lossless)
+        buffer, meta = decoder.as_buffer(ds, decoding_plugin="gdcm")
+        unpacked_buffer = unpack_bits(buffer)[:n_pixels]
+        assert np.array_equal(unpacked_buffer, arr.flatten())
+
+        for index in range(ds.NumberOfFrames):
+            buffer, meta = decoder.as_buffer(ds, decoding_plugin="gdcm", index=index)
+            unpacked_buffer = unpack_bits(buffer)[:n_pixels_per_frame]
+            assert np.array_equal(unpacked_buffer, arr[index].flatten())
 
 
 @pytest.fixture()

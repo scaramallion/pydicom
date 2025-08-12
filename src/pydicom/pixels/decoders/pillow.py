@@ -68,33 +68,31 @@ def _decode_frame(src: bytes, runner: DecodeRunner) -> bytes:
 
     image = Image.open(BytesIO(src), formats=("JPEG", "JPEG2000"))
     if tsyntax in _LIBJPEG_SYNTAXES:
-        if runner.samples_per_pixel == 1:
-            return cast(bytes, image.tobytes())
+        if runner.samples_per_pixel != 1:
+            # Multi-sample image: ensure the output color space is correct
+            cs = runner.get_frame_option(runner.index, "photometric_interpretation")
+            convert_to_rgb = runner.get_option("as_rgb", False) and "YBR" in cs
 
-        # Multi-sample image: ensure the output color space is correct
-        cs = runner.get_frame_option(runner.index, "photometric_interpretation")
-        convert_to_rgb = runner.get_option("as_rgb", False) and "YBR" in cs
-
-        if "adobe_transform" not in image.info:
-            # If the Adobe APP14 marker is not present then Pillow assumes that JPEG
-            #    images were transformed into YCbCr color space prior to compression
-            if convert_to_rgb:
-                # Pillow will default to applying a YCbCr -> RGB conversion
-                runner.set_frame_option(
-                    runner.index, "photometric_interpretation", PI.RGB
-                )
-            else:
-                # Use Image.draft() to signal no color transformation
-                image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
-        elif image.info["adobe_transform"] == 1:  # 0: RGB, 1: YCbCr
-            # If the Adobe APP14 marker is present then Pillow uses the value to
-            #   determine the color space and defaults to returning RGB
-            if convert_to_rgb:
-                runner.set_frame_option(
-                    runner.index, "photometric_interpretation", PI.RGB
-                )
-            elif "YBR" in cs:
-                image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
+            if "adobe_transform" not in image.info:
+                # If the Adobe APP14 marker is not present then Pillow assumes that JPEG
+                #    images were transformed into YCbCr color space prior to compression
+                if convert_to_rgb:
+                    # Pillow will default to applying a YCbCr -> RGB conversion
+                    runner.set_frame_option(
+                        runner.index, "photometric_interpretation", PI.RGB
+                    )
+                else:
+                    # Use Image.draft() to signal no color transformation
+                    image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
+            elif image.info["adobe_transform"] == 1:  # 0: RGB, 1: YCbCr
+                # If the Adobe APP14 marker is present then Pillow uses the value to
+                #   determine the color space and defaults to returning RGB
+                if convert_to_rgb:
+                    runner.set_frame_option(
+                        runner.index, "photometric_interpretation", PI.RGB
+                    )
+                elif "YBR" in cs:
+                    image.draft("YCbCr", image.size)  # type: ignore[no-untyped-call]
 
         return cast(bytes, image.tobytes())
 

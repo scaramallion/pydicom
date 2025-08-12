@@ -43,7 +43,10 @@ def _encode_deflated_frame(src: bytes, runner: EncodeRunner) -> bytes:
     runner.set_frame_option(runner.index, "encoding_plugin", "pydicom")
     # In the case of single bit images, the data must first be bit-packed
     # before being encoded with Deflate
-    if runner._test_for("bit_unpacked", runner.index):
+    if (
+        runner.bits_allocated == 1
+        and runner.get_frame_option(runner.index, "bits_allocated", 1) != 1
+    ):
         src = pack_bits(src, pad=False)
         runner.set_frame_option(runner.index, "bits_allocated", 1)
 
@@ -76,7 +79,10 @@ def _encode_rle_frame(src: bytes, runner: EncodeRunner) -> bytes:
 
     # In the case of single bit images, the data must first be bit-packed
     # before being encoded with RLE
-    if runner._test_for("bit_unpacked", runner.index):
+    if (
+        runner.bits_allocated == 1
+        and runner.get_frame_option(runner.index, "bits_allocated", 1) != 1
+    ):
         src = pack_bits(src, pad=False)
         runner.set_frame_option(runner.index, "bits_allocated", 1)
 

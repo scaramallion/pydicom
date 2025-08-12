@@ -777,10 +777,8 @@ class DecodeRunner(RunnerBase):
                 DeprecationWarning,
             )
 
-        if not isinstance(index, int | None):
-            raise TypeError(
-                f"'index' must be int or None, not '{type(index).__name__}'"
-            )
+        if isinstance(index, bool):
+            raise TypeError("'index' must be int or None, not 'bool'")
 
         d: dict[str, str | int] = {
             "columns": self.columns,
@@ -907,10 +905,8 @@ class DecodeRunner(RunnerBase):
                 DeprecationWarning,
             )
 
-        if not isinstance(index, int | None):
-            raise TypeError(
-                f"'index' must be int or None, not '{type(index).__name__}'"
-            )
+        if isinstance(index, bool):
+            raise TypeError("'index' must be int or None, not 'bool'")
 
         number_of_frames = self.number_of_frames
         samples_per_pixel = self.samples_per_pixel

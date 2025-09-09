@@ -17,9 +17,9 @@ except ImportError:
 
 
 ENCODER_DEPENDENCIES = {
-    uid.JPEG2000Lossless: ("numpy", "pylibjpeg>=2.0", "pylibjpeg-openjpeg>=2.4"),
-    uid.JPEG2000: ("numpy", "pylibjpeg>=2.0", "pylibjpeg-openjpeg>=2.4"),
-    uid.RLELossless: ("numpy", "pylibjpeg>=2.0", "pylibjpeg-rle>=2.0"),
+    uid.JPEG2000Lossless: ("numpy", "pylibjpeg>=2.0", "pylibjpeg-openjpeg>=2.5"),
+    uid.JPEG2000: ("numpy", "pylibjpeg>=2.0", "pylibjpeg-openjpeg>=2.5"),
+    uid.RLELossless: ("numpy", "pylibjpeg>=2.0", "pylibjpeg-rle>=2.2"),
 }
 _OPENJPEG_SYNTAXES = [uid.JPEG2000Lossless, uid.JPEG2000]
 _RLE_SYNTAXES = [uid.RLELossless]
@@ -33,10 +33,10 @@ def is_available(uid: str) -> bool:
         return False
 
     if uid in _OPENJPEG_SYNTAXES:
-        return _passes_version_check("openjpeg", (2, 4))
+        return _passes_version_check("openjpeg", (2, 5))
 
     if uid in _RLE_SYNTAXES:
-        return _passes_version_check("rle", (2, 0))
+        return _passes_version_check("rle", (2, 2))
 
     return False
 
@@ -45,17 +45,22 @@ def _encode_frame(src: bytes, runner: EncodeRunner) -> bytes | bytearray:
     """Return `src` as an encoded codestream."""
     runner.set_frame_option(runner.index, "encoding_plugin", "pylibjpeg")
 
+    # RLE Lossless: always include unused high bits
+    # JPEG 2000 Lossless: may or may not include unused high bits
+    # JPEG 2000: never include unused high bits
+    opts = dict(runner.options)
+    opts["bits_stored"] = runner.get_frame_option(runner.index, "precision")
+
     encoder = cast(Encoder, _ENCODERS[runner.transfer_syntax])
     tsyntax = runner.transfer_syntax
     if tsyntax == uid.RLELossless:
-        return cast(bytes, encoder(src, **runner.options))
+        return cast(bytes, encoder(src, **opts))
 
     if runner.get_frame_option(runner.index, "bits_allocated", 8) == 1:
         pixels_per_frame = runner.rows * runner.columns * runner.samples_per_pixel
         src = cast(bytes, unpack_bits(src, as_array=False)[:pixels_per_frame])
         runner.set_frame_option(runner.index, "bits_allocated", 8)
 
-    opts = dict(runner.options)
     if runner.photometric_interpretation == PI.RGB:
         opts["use_mct"] = False
 

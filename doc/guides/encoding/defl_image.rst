@@ -47,6 +47,15 @@ corresponding color space:
   * For *Photometric Interpretation* ``YBR_FULL`` nothing else is required.
 
 
+Encoding precision
+------------------
+
+*Deflated Image Frame Compression* will always encode the data from all bits of the
+pixel container. For example, if the pixel container size is 16 (*Bits Allocated* 16)
+but only 12 bits are used by the pixel sample (*Bits Stored* 12) then all 16 bits
+will be encoded.
+
+
 Available Plugins
 -----------------
 

@@ -78,8 +78,10 @@ An encoding plugin must implement three objects within the same module:
     :meth:`~pydicom.pixels.encoders.base.EncodeRunner.get_frame_option` and
     and :meth:`~pydicom.pixels.encoders.base.EncodeRunner.set_frame_option` methods:
 
-    * ``bits_allocated``: :class:`int` - the number of bits used to contain each pixel
-      in the frame, should be 1 (for bit-packed data) or a multiple of 8.
+    * ``'bits_allocated'``: :class:`int` - the number of bits used to contain each
+      pixel in the frame, should be 1 (for bit-packed data) or a multiple of 8.
+    * ``'precision'``: :class:`int` - the number of bits per pixel to be preserved when
+      encoding, starting from the least-significant bit (read-only).
 
   At a minimum the encoding function must support the encoding of
   little-endian byte ordered data and should return the encoded

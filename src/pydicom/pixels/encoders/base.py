@@ -65,6 +65,10 @@ class EncodeOptions(RunnerOptions, total=False):
     # The peak signal-to-noise ratio for each layer, should be in increasing order
     j2k_psnr: list[float]
 
+    # JPEG 2000 Lossless and JPEG-LS Lossless
+    # Include any unused high bits when encoding
+    include_high_bits: bool
+
     # RLE Lossless
     # Fix GDCM encoding errors on big endian systems
     rle_fix_gdcm_big_endian: bool
@@ -156,6 +160,17 @@ class EncodeRunner(RunnerBase):
         #   the memory usage
         arr = cast(np.ndarray, self.src[index] if index is not None else self.src)
 
+        # Whether or not to include all bits of a pixel cell when compressing
+        #   RLE Lossless and Deflated Image: always all bits
+        #   JPEG-LS Lossless and JPEG 2000 Lossless: by default all bits
+        #   JPEG-LS Near Lossless and JPEG 2000: always bits_stored bits
+        if self.transfer_syntax in (RLELossless, DeflatedImageFrameCompression):
+            include_high_bits = True
+        elif self.transfer_syntax in (JPEGLSNearLossless, JPEG2000):
+            include_high_bits = False
+        else:
+            include_high_bits = self.get_option("include_high_bits", True)
+
         # The ndarray containing the pixel data may use a larger container
         #   than is strictly needed: e.g. 32 bits allocated with 7 bits stored.
         #   However the encoders expect data to be sized appropriately
@@ -172,6 +187,13 @@ class EncodeRunner(RunnerBase):
         if arr.dtype.itemsize != itemsize:
             arr = arr.astype(f"<{arr.dtype.kind}{itemsize}")
 
+        index = 0 if index is None else index
+        self.set_frame_option(index, "bits_allocated", 8 * itemsize)
+        if include_high_bits:
+            self.set_frame_option(index, "precision", itemsize * 8)
+        else:
+            self.set_frame_option(index, "precision", self.bits_stored)
+
         # JPEG-LS allows different ordering of the input image data via the
         #   interleave mode (ILV) parameter. ILV 0 matches a planar configuration
         #   of 1 and requires shape (samples, rows, columns). ILV 1 and 2 match
@@ -182,9 +204,6 @@ class EncodeRunner(RunnerBase):
             and self.planar_configuration == 1
         ):
             arr = arr.transpose(2, 0, 1)
-
-        index = 0 if index is None else index
-        self.set_frame_option(index, "bits_allocated", 8 * itemsize)
 
         return cast(bytes, arr.tobytes())
 
@@ -200,7 +219,6 @@ class EncodeRunner(RunnerBase):
         #    8 < precision <= 16: a 16-bit container (short)
         #   16 < precision <= 32: a 32-bit container (int/long)
         #   32 < precision <= 64: a 64-bit container (long long)
-        index = 0 if index is None else index
         if self.bits_allocated == 1:
             # Data *may* be bit-packed, use length and source type to infer
             total_pixels = self.frame_length(unit="pixels") * self.number_of_frames
@@ -222,72 +240,54 @@ class EncodeRunner(RunnerBase):
         else:
             bytes_per_frame = cast(int, self.frame_length(unit="bytes"))
 
+        index = 0 if index is None else index
         start = index * bytes_per_frame
         src = cast(bytes, self.src[start : start + bytes_per_frame])
 
-        # Resize the data to fit the appropriate container
-        expected_length = cast(int, self.frame_length(unit="pixels"))
-        bytes_per_pixel = len(src) // expected_length
+        # Whether or not to include all bits of a pixel cell when compressing
+        #   RLE Lossless and Deflated Image: always all bits
+        #   JPEG-LS Lossless and JPEG 2000 Lossless: by default all bits
+        #   JPEG-LS Near Lossless and JPEG 2000: always bits_stored bits
+        if self.transfer_syntax in (RLELossless, DeflatedImageFrameCompression):
+            include_high_bits = True
+        elif self.transfer_syntax in (JPEGLSNearLossless, JPEG2000):
+            include_high_bits = False
+        else:
+            include_high_bits = self.get_option("include_high_bits", True)
 
-        # 1 byte/px actual
-        if self.bits_stored <= 8:
-            # If not 1 byte/px then must be 2, 3, 4, 5, 6, 7 or 8
-            #   but only the first byte is relevant
-            self.set_frame_option(index, "bits_allocated", 8)
-            return src if bytes_per_pixel == 1 else src[::bytes_per_pixel]
+        if include_high_bits:
+            bytes_with_data = math.ceil(self.bits_allocated / 8)
+        else:
+            bytes_with_data = math.ceil(self.bits_stored / 8)
 
-        # 2 bytes/px actual
-        if 8 < self.bits_stored <= 16:
-            self.set_frame_option(index, "bits_allocated", 16)
-            if bytes_per_pixel == 2:
-                return src
+        # Match the actual number of bytes used per pixel to the required container size
+        container_sizes = {1: 1, 2: 2, 3: 4, 4: 4, 5: 8, 6: 8, 7: 8, 8: 8}
+        container_size = container_sizes[bytes_with_data]
 
-            # If not 2 bytes/px then must be 3, 4, 5, 6, 7 or 8
-            #   but only the first 2 bytes are relevant
-            out = bytearray(expected_length * 2)
-            out[::2] = src[::bytes_per_pixel]
-            out[1::2] = src[1::bytes_per_pixel]
-            return out
+        # The number of bits in the container that will be encoded
+        precision = container_size * 8 if include_high_bits else self.bits_stored
+        self.set_frame_option(index, "precision", precision)
 
-        # 3 or 4 bytes/px actual
-        if 16 < self.bits_stored <= 32:
-            self.set_frame_option(index, "bits_allocated", 32)
-            if bytes_per_pixel == 4:
-                return src
-
-            # If not 4 bytes/px then must be 3, 5, 6, 7 or 8
-            #   but only the first 3 or 4 bytes are relevant
-            out = bytearray(expected_length * 4)
-            out[::4] = src[::bytes_per_pixel]
-            out[1::4] = src[1::bytes_per_pixel]
-            out[2::4] = src[2::bytes_per_pixel]
-            if bytes_per_pixel > 3:
-                out[3::4] = src[3::bytes_per_pixel]
-
-            return out
-
-        # 32 < bits_stored <= 64 (maximum allowed)
-        # 5, 6, 7 or 8 bytes/px actual
-        self.set_frame_option(index, "bits_allocated", 64)
-        if bytes_per_pixel == 8:
+        # Examples
+        # bits_stored 8, bits_allocated 16, include_high_bits False -> 8-bit container
+        #   strip out every second byte
+        # bits_stored 8, bits_allocated 16, include_high_bits True -> 16-bit container
+        #   return unchanged
+        # bits_stored 16, bits_allocated 24, include_high_bits False -> 16-bit container
+        #   strip out every third byte
+        # bits_stored 16, bits_allocated 24, include_high_bits True -> 32-bit container
+        #   add an extra padding byte after every third byte
+        expected_nr_pixels = cast(int, self.frame_length(unit="pixels"))
+        bytes_per_pixel = bytes_per_frame // expected_nr_pixels
+        if bytes_with_data in (1, 2, 4, 8) and bytes_with_data == bytes_per_pixel:
+            # Container is already the appropriate size
             return src
 
-        # If not 8 bytes/px then must be 5, 6 or 7
-        out = bytearray(expected_length * 8)
-        out[::8] = src[::bytes_per_pixel]
-        out[1::8] = src[1::bytes_per_pixel]
-        out[2::8] = src[2::bytes_per_pixel]
-        out[3::8] = src[3::bytes_per_pixel]
-        out[4::8] = src[4::bytes_per_pixel]
-        if bytes_per_pixel == 5:
-            return out
+        # Resize the container to the appropriate size
+        out = bytearray(expected_nr_pixels * container_size)
+        for offset in range(bytes_with_data):
+            out[offset::container_size] = src[offset::bytes_per_pixel]
 
-        out[5::8] = src[5::bytes_per_pixel]
-        if bytes_per_pixel == 6:
-            return out
-
-        # 7 bytes/px
-        out[6::8] = src[6::bytes_per_pixel]
         return out
 
     def set_encoders(self, encoders: dict[str, EncodeFunction]) -> None:
@@ -385,8 +385,8 @@ class EncodeRunner(RunnerBase):
         shape = arr.shape
         dtype = arr.dtype
 
-        if len(shape) not in (2, 3, 4):
-            raise ValueError(f"Unable to encode {len(shape)}D ndarrays")
+        if arr.ndim not in (2, 3, 4):
+            raise ValueError(f"Unable to encode {arr.ndim}D ndarrays")
 
         # `arr` may be (for planar configuration 0):
         #   (rows, columns)
@@ -435,21 +435,6 @@ class EncodeRunner(RunnerBase):
                 f"'Bits Allocated' value of '{self.bits_allocated}'"
             )
 
-        # Check the pixel data values are consistent with *Bits Stored*
-        amax, amin = arr.max(), arr.min()
-        if is_signed:
-            minimum = -(2 ** (self.bits_stored - 1))
-            maximum = 2 ** (self.bits_stored - 1) - 1
-        else:
-            minimum, maximum = 0, 2**self.bits_stored - 1
-
-        if amax > maximum or amin < minimum:
-            raise ValueError(
-                "The ndarray contains values that are outside the allowable "
-                f"range of ({minimum}, {maximum}) for a (0028,0101) 'Bits "
-                f"Stored' value of '{self.bits_stored}'"
-            )
-
         if self.transfer_syntax == JPEGLSNearLossless and is_signed:
             # JPEG-LS doesn't track signedness, so with lossy encoding of
             #   signed data it's possible to flip from a negative to a positive
@@ -459,7 +444,15 @@ class EncodeRunner(RunnerBase):
             #   `jls_error` is the JPEG-LS 'NEAR' parameter and `minimum`
             #   and `maximum` are the min/max possible values for a given
             #   sample precision
+            # Unused high bits are ignored for lossy, so there's no harm in raising
+            #   here if outside expected limits
             error = self.get_option("jls_error", 0)
+            amax, amin = arr.max(), arr.min()
+            if is_signed:
+                minimum = -(2 ** (self.bits_stored - 1))
+                maximum = 2 ** (self.bits_stored - 1) - 1
+            else:
+                minimum, maximum = 0, 2**self.bits_stored - 1
             within = amax <= (maximum - error) and amin >= (minimum + error)
             if error and not within:
                 raise ValueError(

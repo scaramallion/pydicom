@@ -280,6 +280,7 @@ class FrameOptions(TypedDict, total=False):
 
     ## EncodeRunner
     encoding_plugin: str
+    precision: int
 
     ## DecodeRunner and EncodeRunner
     bits_allocated: int  # bits_allocated 1 indicates the frame data is bit-packed

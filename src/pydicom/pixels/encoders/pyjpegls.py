@@ -40,11 +40,13 @@ def _encode_frame(src: bytes, runner: EncodeRunner) -> bytearray:
             "'JPEG-LS Near Lossless' instead?"
         )
 
+    # JPEG-LS Near Lossless: never include unused high bits
+    # JPEG-LS Lossless: may or may not include unused high bits
     opts = {
         "rows": runner.rows,
         "columns": runner.columns,
         "samples_per_pixel": runner.samples_per_pixel,
-        "bits_stored": runner.bits_stored,
+        "bits_stored": runner.get_frame_option(runner.index, "precision"),
     }
 
     if runner.samples_per_pixel > 1:

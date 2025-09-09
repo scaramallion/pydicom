@@ -13,6 +13,8 @@ Changes
   <pydicom.pixels.decoders.base.Decoder.as_buffer>` is now a ``dict`` containing the
   per-frame metadata to help account for inter-frame variations in frame properties
   when decoding.
+* When encoding with *JPEG 2000 Lossless* and *JPEG-LS Lossless* all bits of the pixel
+  data are now included by default, rather than just the *Bits Stored* bits.
 
 Fixes
 -----
@@ -76,3 +78,6 @@ Enhancements
   :func:`~pydicom.pixels.convert_color_space` where applicable (:issue:`2228`)
 * Take the color space information from an Adobe APP14 marker into account when decoding
   pixel data for JPEG transfer syntaxes.
+* Added the `include_high_bits` option for *JPEG 2000 Lossless* and *JPEG-LS
+  Lossless* encoding to allow specifying whether or not any "unused" high bits above
+  *Bits Stored* are included when encoding (:issue:`2260`).

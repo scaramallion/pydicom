@@ -136,6 +136,18 @@ With *Planar Configuration* ``1`` the data is ordered as color-by-plane::
     src = b"\xFF\x00\x00\xFF\xFF\xFF\x00\x00\xFF"
 
 
+Encoding precision
+------------------
+
+*JPEG-LS Near Lossless* will always encode the data from all bits of the pixel container.
+For example, if the pixel container size is 16 (*Bits Allocated* 16) but only 12 bits
+are used by the pixel sample (*Bits Stored* 12) then all 16 bits will be encoded.
+
+*JPEG-LS Lossless* will default to encoding all bits of the pixel container, however
+the `include_high_bits` :doc:`encoding option<../encoder_plugin_options>` may be used
+to specify that only the *Bits Stored* number of bits should be encoded.
+
+
 Examples
 --------
 

@@ -75,6 +75,14 @@ The decision to change the color space should be made with the intended
 usage of your dataset in mind.
 
 
+Encoding precision
+------------------
+
+*RLE Lossless* will always encode the data from all bits of the pixel container. For
+example, if the pixel container size is 16 (*Bits Allocated* 16) but only 12 bits are
+used by the pixel sample (*Bits Stored* 12) then all 16 bits will be encoded.
+
+
 Available Plugins
 -----------------
 

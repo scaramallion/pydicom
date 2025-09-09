@@ -95,6 +95,17 @@ Bits Stored
 The maximum supported *Bits Stored* value for encoding is ``24``, however the
 results for lossy compression are quite poor for more than ~20 bits.
 
+Encoding precision
+------------------
+
+*JPEG 2000* will always encode the data from all bits of the pixel container. For
+example, if the pixel container size is 16 (*Bits Allocated* 16) but only 12 bits are
+used by the pixel sample (*Bits Stored* 12) then all 16 bits will be encoded.
+
+*JPEG 2000 Lossless* will default to encoding all bits of the pixel container, however
+the `include_high_bits` :doc:`encoding option<../encoder_plugin_options>` may be used
+to specify that only the *Bits Stored* number of bits should be encoded.
+
 
 Examples
 --------

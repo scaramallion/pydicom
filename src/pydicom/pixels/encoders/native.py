@@ -27,6 +27,8 @@ def is_available(uid: str) -> bool:
 def _encode_deflated_frame(src: bytes, runner: EncodeRunner) -> bytes:
     """Use the deflate algorithm to compress `src`.
 
+    Always includes any unused high bits when encoding.
+
     Parameters
     ----------
     src : bytes
@@ -58,6 +60,8 @@ def _encode_deflated_frame(src: bytes, runner: EncodeRunner) -> bytes:
 
 def _encode_rle_frame(src: bytes, runner: EncodeRunner) -> bytes:
     """Wrapper for use with the encoder interface.
+
+    Always includes any unused high bits when encoding.
 
     Parameters
     ----------

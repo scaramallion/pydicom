@@ -58,6 +58,8 @@ def encode_pixel_data(src: bytes, runner: EncodeRunner) -> bytes:
 def _rle_encode(src: bytes, runner: EncodeRunner) -> bytes:
     """Return RLE encoded image data from `src`.
 
+    Always includes any unused high bits when encoding.
+
     Parameters
     ----------
     src : bytes

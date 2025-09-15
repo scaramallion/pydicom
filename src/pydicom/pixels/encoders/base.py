@@ -175,13 +175,16 @@ class EncodeRunner(RunnerBase):
         #   than is strictly needed: e.g. 32 bits allocated with 7 bits stored.
         #   However the encoders expect data to be sized appropriately
         #   for the sample precision, so we may need to downscale
-        if self.bits_stored <= 8:
+        # If we're encoding unused bits then do we keep the original itemsize?
+        #   or use bits_allocated instead of bits_stored here
+        precision = self.bits_allocated if include_high_bits else self.bits_stored
+        if precision <= 8:
             itemsize = 1
-        elif 8 < self.bits_stored <= 16:
+        elif 8 < precision <= 16:
             itemsize = 2
-        elif 16 < self.bits_stored <= 32:
+        elif 16 < precision <= 32:
             itemsize = 4
-        elif 32 < self.bits_stored <= 64:
+        elif 32 < precision <= 64:
             itemsize = 8
 
         if arr.dtype.itemsize != itemsize:
@@ -189,10 +192,11 @@ class EncodeRunner(RunnerBase):
 
         index = 0 if index is None else index
         self.set_frame_option(index, "bits_allocated", 8 * itemsize)
-        if include_high_bits:
-            self.set_frame_option(index, "precision", itemsize * 8)
-        else:
-            self.set_frame_option(index, "precision", self.bits_stored)
+
+        # if include_high_bits:
+        #     self.set_frame_option(index, "precision", 8 * itemsize)
+        # else:
+        #     self.set_frame_option(index, "precision", self.bits_stored)
 
         # JPEG-LS allows different ordering of the input image data via the
         #   interleave mode (ILV) parameter. ILV 0 matches a planar configuration
@@ -248,13 +252,13 @@ class EncodeRunner(RunnerBase):
         #   RLE Lossless and Deflated Image: always all bits
         #   JPEG-LS Lossless and JPEG 2000 Lossless: by default all bits
         #   JPEG-LS Near Lossless and JPEG 2000: always bits_stored bits
-        if self.transfer_syntax in (RLELossless, DeflatedImageFrameCompression):
-            include_high_bits = True
-        elif self.transfer_syntax in (JPEGLSNearLossless, JPEG2000):
-            include_high_bits = False
-        else:
-            include_high_bits = self.get_option("include_high_bits", True)
-
+        # if self.transfer_syntax in (RLELossless, DeflatedImageFrameCompression):
+        #     include_high_bits = True
+        # elif self.transfer_syntax in (JPEGLSNearLossless, JPEG2000):
+        #     include_high_bits = False
+        # else:
+        #     include_high_bits = self.get_option("include_high_bits", True)
+        #
         if include_high_bits:
             bytes_with_data = math.ceil(self.bits_allocated / 8)
         else:
@@ -265,8 +269,8 @@ class EncodeRunner(RunnerBase):
         container_size = container_sizes[bytes_with_data]
 
         # The number of bits in the container that will be encoded
-        precision = container_size * 8 if include_high_bits else self.bits_stored
-        self.set_frame_option(index, "precision", precision)
+        # precision = container_size * 8 if include_high_bits else self.bits_stored
+        # self.set_frame_option(index, "precision", precision)
 
         # Examples
         # bits_stored 8, bits_allocated 16, include_high_bits False -> 8-bit container
@@ -287,6 +291,8 @@ class EncodeRunner(RunnerBase):
         out = bytearray(expected_nr_pixels * container_size)
         for offset in range(bytes_with_data):
             out[offset::container_size] = src[offset::bytes_per_pixel]
+
+        self.set_frame_option(self.index, "bits_allocated", container_size * 8)
 
         return out
 

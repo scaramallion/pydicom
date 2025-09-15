@@ -49,23 +49,30 @@ def _encode_frame(src: bytes, runner: EncodeRunner) -> bytes | bytearray:
     # JPEG 2000 Lossless: may or may not include unused high bits
     # JPEG 2000: never include unused high bits
     opts = dict(runner.options)
-    opts["bits_stored"] = runner.get_frame_option(runner.index, "precision")
+    # opts["bits_stored"] = runner.get_frame_option(runner.index, "precision")
 
-    encoder = cast(Encoder, _ENCODERS[runner.transfer_syntax])
     tsyntax = runner.transfer_syntax
-    if tsyntax == uid.RLELossless:
-        return cast(bytes, encoder(src, **opts))
+    encoder = cast(Encoder, _ENCODERS[tsyntax])
 
     if runner.get_frame_option(runner.index, "bits_allocated", 8) == 1:
         pixels_per_frame = runner.rows * runner.columns * runner.samples_per_pixel
         src = cast(bytes, unpack_bits(src, as_array=False)[:pixels_per_frame])
         runner.set_frame_option(runner.index, "bits_allocated", 8)
 
+    bits_allocated = runner.get_frame_option(runner.index, "bits_allocated")
+
+    if tsyntax == uid.RLELossless:
+        # RLE Lossless: always include all bits of the pixel cell
+        opts["bits_stored"] = bits_allocated
+        return cast(bytes, encoder(src, **opts))
+
     if runner.photometric_interpretation == PI.RGB:
         opts["use_mct"] = False
 
     cr = opts.pop("compression_ratios", opts.get("j2k_cr", None))
     psnr = opts.pop("signal_noise_ratios", opts.get("j2k_psnr", None))
+
+    # JPEG 2000 Lossless: may or may not include all bits of the pixel cell
     if tsyntax == uid.JPEG2000Lossless:
         if cr or psnr:
             raise ValueError(
@@ -74,8 +81,20 @@ def _encode_frame(src: bytes, runner: EncodeRunner) -> bytes | bytearray:
                 "2000' instead?"
             )
 
+        # pylibjpeg-openjpeg is unable to encode more than 24 bits
+        if runner.get_option("include_high_bits", True):
+            if bits_allocated > 24 and runner.bits_stored <= 24:
+                raise ValueError(
+                    "Unable to encode data that uses more than 24-bits per pixel, pass "
+                    "'include_high_bits=False' to encode only the (0028,0101) 'Bits Stored' "
+                    f"number of bits ({runner.bits_stored})"
+                )
+
+            opts["bits_stored"] = bits_allocated
+
         return cast(bytes, encoder(src, **opts))
 
+    # JPEG 2000: never include unused high bits in the pixel cell
     if not cr and not psnr:
         raise ValueError(
             "The 'JPEG 2000' transfer syntax requires a lossy configuration "

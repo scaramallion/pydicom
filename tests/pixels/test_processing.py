@@ -438,7 +438,7 @@ class TestModalityLUT:
         assert np.array_equal(original, arr)
         assert np.array_equal([[[2]], [[4]]], out)
 
-    def test_per_frame_functional_group_slice_number(self):
+    def test_per_frame_functional_group_frame_index(self):
         """Test selecting one per-frame transformation."""
         ds = Dataset()
         ds.NumberOfFrames = 2
@@ -448,14 +448,14 @@ class TestModalityLUT:
         ]
         arr = np.asarray([[1]], dtype=np.int16)
 
-        out = apply_modality_lut(arr, ds, slice_number=1)
+        out = apply_modality_lut(arr, ds, frame_index=1)
 
         assert np.float64 == out.dtype
         assert np.array_equal([[4]], out)
 
-        msg = r"The slice number \(2\) is outside the available frame range"
+        msg = r"The frame index '2' is outside the available frame range"
         with pytest.raises(IndexError, match=msg):
-            apply_modality_lut(arr, ds, slice_number=2)
+            apply_modality_lut(arr, ds, frame_index=2)
 
     def test_missing_per_frame_functional_group(self):
         """Test a missing per-frame transform leaves that frame unchanged."""
@@ -496,8 +496,8 @@ class TestModalityLUT:
         arr = np.atleast_3d([1, 1])
 
         msg = (
-            r"The number of frame functional groups \(2\) does not match the "
-            r"number of frames in the array \(1\)"
+            r"The number of items in \(5200,9230\) 'Per Frame Functional Groups "
+            r"Sequence' \(2\) does not match the number of frames in the array \(1\)"
         )
         with pytest.raises(ValueError, match=msg):
             apply_modality_lut(arr, ds)
@@ -510,8 +510,9 @@ class TestModalityLUT:
         arr = np.ones((2, 2, 2), dtype=np.int16)
 
         msg = (
-            r"The number of frame functional groups \(1\) does not match the "
-            r"dataset's Number of Frames \(2\)"
+            r"The number of items in \(5200,9230\) 'Per Frame Functional Groups "
+            r"Sequence' \(1\) does not match the dataset's \(0028,0008\) 'Number of "
+            r"Frames' \(2\)"
         )
         with pytest.raises(ValueError, match=msg):
             apply_modality_lut(arr, ds)
@@ -1538,7 +1539,7 @@ class TestApplyWindowing:
         assert np.float64 == out.dtype
         assert np.array_equal([[[255]], [[0]]], out)
 
-        out = apply_windowing(arr[0], ds, slice_number=1)
+        out = apply_windowing(arr[0], ds, frame_index=1)
         assert np.array_equal([[0]], out)
 
     def test_window_per_frame_slice_errors(self):
@@ -1555,19 +1556,20 @@ class TestApplyWindowing:
         arr = np.asarray([[0]], dtype=np.uint8)
 
         msg = (
-            r"The number of frame functional groups \(2\) does not match the "
-            r"dataset's Number of Frames \(3\)"
+            r"The number of items in \(5200,9230\) 'Per Frame Functional Groups "
+            r"Sequence' \(2\) does not match the dataset's \(0028,0008\) 'Number of "
+            r"Frames' \(3\)"
         )
         with pytest.raises(ValueError, match=msg):
-            apply_windowing(arr, ds, slice_number=0)
+            apply_windowing(arr, ds, frame_index=0)
 
         ds.NumberOfFrames = 2
-        msg = r"The slice number \(-1\) is outside the available frame range"
+        msg = r"The frame index '-1' is outside the available frame range"
         with pytest.raises(IndexError, match=msg):
-            apply_windowing(arr, ds, slice_number=-1)
+            apply_windowing(arr, ds, frame_index=-1)
 
         ds.PerFrameFunctionalGroupsSequence[0] = Dataset()
-        out = apply_windowing(arr, ds, slice_number=0)
+        out = apply_windowing(arr, ds, frame_index=0)
         assert arr is out
 
     def test_window_per_frame_mismatch(self):
@@ -1584,16 +1586,17 @@ class TestApplyWindowing:
         arr = np.asarray([[[0]], [[0]]], dtype=np.uint8)
 
         msg = (
-            r"The number of frame functional groups \(2\) does not match the "
-            r"dataset's Number of Frames \(3\)"
+            r"The number of items in \(5200,9230\) 'Per Frame Functional Groups "
+            r"Sequence' \(2\) does not match the dataset's \(0028,0008\) 'Number of "
+            r"Frames' \(3\)"
         )
         with pytest.raises(ValueError, match=msg):
             apply_windowing(arr, ds)
 
         ds.NumberOfFrames = 2
         msg = (
-            r"The number of frame functional groups \(2\) does not match the "
-            r"number of frames in the array \(1\)"
+            r"The number of items in \(5200,9230\) 'Per Frame Functional Groups "
+            r"Sequence' \(2\) does not match the number of frames in the array \(1\)"
         )
         with pytest.raises(ValueError, match=msg):
             apply_windowing(arr[0], ds)
@@ -1787,9 +1790,9 @@ class TestApplyWindowing:
         np.testing.assert_allclose(out, expected, rtol=0, atol=1e-8)
 
         for idx in range(2):
-            frame = apply_modality_lut(arr[idx], ds, slice_number=idx)
+            frame = apply_modality_lut(arr[idx], ds, frame_index=idx)
             np.testing.assert_allclose(
-                windowing(frame, ds, slice_number=idx), expected[idx], rtol=0, atol=1e-8
+                windowing(frame, ds, frame_index=idx), expected[idx], rtol=0, atol=1e-8
             )
 
         assert out.dtype == np.float64

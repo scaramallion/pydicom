@@ -39,45 +39,6 @@ _CMS_INTENTS = {
 }
 
 
-def _get_rescale_parameters(ds: "Dataset") -> tuple[float, float] | None:
-    """Return the rescale slope and intercept in `ds`, if present."""
-    slope = ds.get("RescaleSlope", None)
-    intercept = ds.get("RescaleIntercept", None)
-    if slope is not None and intercept is not None:
-        return cast(float, slope), cast(float, intercept)
-
-    return None
-
-
-def _get_functional_group_rescale(
-    group: "Dataset",
-) -> tuple[float, float] | None:
-    """Return rescale parameters from a Pixel Value Transformation macro."""
-    sequence = group.get("PixelValueTransformationSequence")
-    if not sequence:
-        return None
-
-    item = cast(list["Dataset"], sequence)[0]
-    return _get_rescale_parameters(item)
-
-
-def _get_functional_group_voi(group: "Dataset") -> "Dataset | None":
-    """Return the Frame VOI LUT macro item in `group`, if present."""
-    sequence = group.get("FrameVOILUTSequence")
-    if not sequence:
-        return None
-
-    return cast(list["Dataset"], sequence)[0]
-
-
-def _has_windowing(ds: "Dataset") -> bool:
-    """Return ``True`` if `ds` contains valid windowing parameters."""
-    return None not in [
-        ds.get("WindowCenter", None),
-        ds.get("WindowWidth", None),
-    ]
-
-
 def apply_color_lut(
     arr: "np.ndarray", ds: "Dataset | None" = None, palette: str | UID | None = None
 ) -> "np.ndarray":
@@ -378,9 +339,14 @@ def apply_icc_profile(
 
 
 def apply_modality_lut(
-    arr: "np.ndarray", ds: "Dataset", slice_number: int | None = None
+    arr: "np.ndarray", ds: "Dataset", frame_index: int | None = None
 ) -> "np.ndarray":
     """Apply a modality lookup table or rescale operation to `arr`.
+
+    .. versionchanged:: 3.1
+
+        Added the `frame_index` keyword parameter and support for pixel value
+        transformation functional groups.
 
     Parameters
     ----------
@@ -392,10 +358,13 @@ def apply_modality_lut(
         <part03/sect_C.11.html#sect_C.11.1>` or a :dcm:`Pixel Value
         Transformation Functional Group
         <part03/sect_C.7.6.16.2.html#sect_C.7.6.16.2.9>`.
-    slice_number : int, optional
-        The zero-based frame number whose per-frame transformation should be
-        applied to `arr`. If not supplied then all per-frame transformations
-        are applied in frame order.
+    frame_index : int, optional
+        The zero-based frame index whose per-frame transformation should be applied
+        applied to all frames in `arr`. If there are no corresponding per-frame
+        parameters then the shared or top-level parameters will be used. If there
+        are no per-frame nor shared nor top-level parameters then `arr` will be
+        return unchanged. If not supplied then all per-frame transformations are
+        applied in frame order (if available).
 
     Returns
     -------
@@ -481,78 +450,8 @@ def apply_modality_lut(
         )
 
         return lut_data[clipped_iv]
-    rescale = _get_rescale_parameters(ds)
-    if rescale is not None:
-        slope, intercept = rescale
-        arr = arr.astype(np.float64) * slope
-        arr += intercept
-        return arr
 
-    shared = cast(list["Dataset"], ds.get("SharedFunctionalGroupsSequence", []))
-    if shared:
-        rescale = _get_functional_group_rescale(shared[0])
-        if rescale is not None:
-            slope, intercept = rescale
-            arr = arr.astype(np.float64) * slope
-            arr += intercept
-            return arr
-
-    per_frame = cast(list["Dataset"], ds.get("PerFrameFunctionalGroupsSequence", []))
-    if not per_frame:
-        return arr
-
-    transforms = [_get_functional_group_rescale(group) for group in per_frame]
-    if not any(transform is not None for transform in transforms):
-        return arr
-
-    nr_frames = len(per_frame)
-    declared_frames = ds.get("NumberOfFrames")
-    if declared_frames is not None and int(declared_frames) != nr_frames:
-        raise ValueError(
-            f"The number of frame functional groups ({nr_frames}) does not "
-            f"match the dataset's Number of Frames ({declared_frames})"
-        )
-
-    if slice_number is not None:
-        if slice_number < 0 or slice_number >= nr_frames:
-            raise IndexError(
-                f"The slice number ({slice_number}) is outside the available "
-                f"frame range (0 to {nr_frames - 1})"
-            )
-
-        transform = transforms[slice_number]
-        if transform is None:
-            return arr
-
-        slope, intercept = transform
-        arr = arr.astype(np.float64) * slope
-        arr += intercept
-        return arr
-
-    if nr_frames > 1:
-        arr_frames = arr.shape[0] if arr.ndim >= 3 else 1
-        if nr_frames != arr_frames:
-            raise ValueError(
-                f"The number of frame functional groups ({nr_frames}) does not "
-                f"match the number of frames in the array ({arr_frames})"
-            )
-
-    arr = arr.astype(np.float64)
-    if nr_frames == 1:
-        slope, intercept = cast(tuple[float, float], transforms[0])
-        arr *= slope
-        arr += intercept
-        return arr
-
-    for idx, transform in enumerate(transforms):
-        if transform is None:
-            continue
-
-        slope, intercept = transform
-        arr[idx] *= slope
-        arr[idx] += intercept
-
-    return arr
+    return _apply_rescale(arr, ds, frame_index)
 
 
 def apply_presentation_lut(arr: "np.ndarray", ds: "Dataset") -> "np.ndarray":
@@ -631,6 +530,95 @@ def apply_presentation_lut(arr: "np.ndarray", ds: "Dataset") -> "np.ndarray":
     return arr
 
 
+def _apply_rescale(
+    arr: "np.ndarray", ds: "Dataset", frame_index: int | None = None
+) -> "np.ndarray":
+    """Apply a rescale operation to `arr`. See apply_modality_lut() for details."""
+    rescale = _get_rescale_parameters(ds)
+    if rescale is not None:
+        slope, intercept = rescale
+        arr = arr.astype(np.float64) * slope
+        arr += intercept
+        return arr
+
+    # Part 3, C.7.6.16: only a single item shall be included in this sequence
+    # C.7.6.16.1.1: an empty item is permitted
+    # A single functional group shall not be included in both shared and per-frame
+    #   functional groups sequence
+    shared = cast(list["Dataset"], ds.get("SharedFunctionalGroupsSequence", []))
+    if shared:
+        rescale = _get_functional_group_rescale(shared[0])
+        if rescale is not None:
+            slope, intercept = rescale
+            arr = arr.astype(np.float64) * slope
+            arr += intercept
+            return arr
+
+    # C.7.6.16: one or more items shall be included in this sequence, the number of
+    #   items shall be the same as the number of frames
+    per_frame = cast(list["Dataset"], ds.get("PerFrameFunctionalGroupsSequence", []))
+    if not per_frame:
+        return arr
+
+    transforms = [_get_functional_group_rescale(group) for group in per_frame]
+    if not any(transform is not None for transform in transforms):
+        return arr
+
+    nr_frames = len(per_frame)
+    declared_frames = ds.get("NumberOfFrames")
+    if declared_frames is not None and int(declared_frames) != nr_frames:
+        raise ValueError(
+            "The number of items in (5200,9230) 'Per Frame Functional Groups Sequence' "
+            f"({nr_frames}) does not match the dataset's (0028,0008) 'Number of "
+            f"Frames' ({declared_frames})"
+        )
+
+    # Apply the transform for `frame_index` to all frames
+    if frame_index is not None:
+        if not 0 <= frame_index < nr_frames:
+            raise IndexError(
+                f"The frame index '{frame_index}' is outside the available "
+                f"frame range (0 to {nr_frames - 1})"
+            )
+
+        transform = transforms[frame_index]
+        if transform is None:
+            return arr
+
+        slope, intercept = transform
+        arr = arr.astype(np.float64) * slope
+        arr += intercept
+        return arr
+
+    # Apply per-frame transforms
+    if nr_frames > 1:
+        arr_frames = arr.shape[0] if arr.ndim >= 3 else 1
+        if nr_frames != arr_frames:
+            raise ValueError(
+                "The number of items in (5200,9230) 'Per Frame Functional Groups "
+                f"Sequence' ({nr_frames}) does not match the number of frames in the "
+                f"array ({arr_frames})"
+            )
+
+    arr = arr.astype(np.float64)
+    # The case for a single frame with an empty transform was covered earlier
+    if nr_frames == 1:
+        slope, intercept = cast(tuple[float, float], transforms[0])
+        arr *= slope
+        arr += intercept
+        return arr
+
+    for idx, transform in enumerate(transforms):
+        if transform is None:
+            continue
+
+        slope, intercept = transform
+        arr[idx] *= slope
+        arr[idx] += intercept
+
+    return arr
+
+
 apply_rescale = apply_modality_lut
 
 
@@ -639,13 +627,18 @@ def apply_voi_lut(
     ds: "Dataset",
     index: int = 0,
     prefer_lut: bool = True,
-    slice_number: int | None = None,
+    frame_index: int | None = None,
 ) -> "np.ndarray":
     """Apply a VOI lookup table or windowing operation to `arr`.
 
     .. versionchanged:: 2.1
 
         Added the `prefer_lut` keyword parameter
+
+    .. versionchanged:: 3.1
+
+        Added the `frame_index` keyword parameter and support for Frame VOI LUT
+        functional groups.
 
     Parameters
     ----------
@@ -667,10 +660,10 @@ def apply_voi_lut(
         When the VOI LUT Module contains both *Window Width*/*Window Center*
         and *VOI LUT Sequence*, if ``True`` (default) then apply the VOI LUT,
         otherwise apply the windowing operation.
-    slice_number : int, optional
-        The zero-based frame number whose per-frame Frame VOI LUT parameters
-        should be applied to `arr`. If not supplied then all per-frame
-        parameters are applied in frame order.
+    frame_index : int, optional
+        The zero-based frame index whose per-frame Frame VOI LUT parameters
+        should be applied to all frames in `arr`. If not supplied then all
+        per-frame parameters are applied in frame order.
 
     Returns
     -------
@@ -695,6 +688,8 @@ def apply_voi_lut(
       <part03/sect_C.11.html#sect_C.11.2>`
     * DICOM Standard, Part 3, :dcm:`Annex C.8.11.3.1.5
       <part03/sect_C.8.11.3.html#sect_C.8.11.3.1.5>`
+    * DICOM Standard, Part 3, :dcm:`Annex C.7.6.16.2.10
+      <part03/sect_C.7.6.16.2.html#sect_C.7.6.16.2.10>`
     * DICOM Standard, Part 4, :dcm:`Annex N.2.1.1
       <part04/sect_N.2.html#sect_N.2.1.1>`
     """
@@ -705,6 +700,7 @@ def apply_voi_lut(
             ds.VOILUTSequence[0].get("LUTDescriptor", None),
             ds.VOILUTSequence[0].get("LUTData", None),
         ]
+
     valid_windowing = _has_windowing(ds)
     if not valid_windowing:
         shared = cast(list["Dataset"], ds.get("SharedFunctionalGroupsSequence", []))
@@ -724,13 +720,13 @@ def apply_voi_lut(
         if prefer_lut:
             return apply_voi(arr, ds, index)
 
-        return apply_windowing(arr, ds, index, slice_number)
+        return apply_windowing(arr, ds, index, frame_index)
 
     if valid_voi:
         return apply_voi(arr, ds, index)
 
     if valid_windowing:
-        return apply_windowing(arr, ds, index, slice_number)
+        return apply_windowing(arr, ds, index, frame_index)
 
     return arr
 
@@ -848,7 +844,29 @@ def _apply_windowing(
     index: int,
     rescale: tuple[float, float] | None,
 ) -> "np.ndarray":
-    """Apply windowing using `voi` and image metadata from `ds`."""
+    """Apply windowing to `arr` using `voi` and image metadata from `ds`.
+
+    Parameters
+    ----------
+    arr : numpy.ndarray
+        A single frame  to apply the windowing operation to.
+    ds : dataset.Dataset
+        The top level dataset containing Image Pixel module elements.
+    voi : dataset.Dataset
+        A dataset containing a VOI LUT Module, may be either the top-level dataset
+        or the function group item.
+    index : int
+        When the VOI LUT Module contains multiple alternative views, this is
+        the index of the view to return.
+    rescale: tuple[float, float] | None
+        The (slope, intercept) from any rescale operation, or None if no rescale
+        operation is required.
+
+    Returns
+    -------
+    np.ndarray
+        An array with applied windowing operation.
+    """
     if ds.PhotometricInterpretation not in ["MONOCHROME1", "MONOCHROME2"]:
         raise ValueError(
             "When performing a windowing operation only 'MONOCHROME1' and "
@@ -940,28 +958,36 @@ def apply_windowing(
     arr: "np.ndarray",
     ds: "Dataset",
     index: int = 0,
-    slice_number: int | None = None,
+    frame_index: int | None = None,
 ) -> "np.ndarray":
     """Apply a windowing operation to `arr`.
 
     .. versionadded:: 2.1
+
+    .. versionchanged:: 3.1
+
+        Added the `frame_index` keyword parameter and support for Frame VOI LUT
+        functional groups.
 
     Parameters
     ----------
     arr : numpy.ndarray
         The :class:`~numpy.ndarray` to apply the windowing operation to.
     ds : dataset.Dataset
-        A dataset containing a :dcm:`VOI LUT Module<part03/sect_C.11.2.html>`.
-        If (0028,1050) *Window Center* and (0028,1051) *Window Width* are
-        present then returns an array of ``np.float64``, otherwise `arr` will
-        be returned unchanged.
+        A dataset containing a :dcm:`VOI LUT Module<part03/sect_C.11.2.html>`
+        or Frame VOI LUT functional group. If (0028,1050) *Window Center* and
+        (0028,1051)  *Window Width* are present then returns an array of
+        ``np.float64``, otherwise `arr` will be returned unchanged.
     index : int, optional
         When the VOI LUT Module contains multiple alternative views, this is
         the index of the view to return (default ``0``).
-    slice_number : int, optional
-        The zero-based frame number whose per-frame Frame VOI LUT parameters
-        should be applied to `arr`. If not supplied then all per-frame
-        parameters are applied in frame order.
+    frame_index : int, optional
+        The zero-based frame index whose per-frame Frame VOI LUT parameters
+        should be applied to all frames in `arr`. If there are no corresponding
+        per-frame parameters then the shared or top-level VOI LUT parameters will
+        be used. If there are no per-frame nor shared nor top-level VOI LUT
+        parameters then `arr` will be returned unchanged. If not supplied then
+        all per-frame parameters are applied in frame order (if available).
 
     Returns
     -------
@@ -986,12 +1012,16 @@ def apply_windowing(
       <part03/sect_C.11.html#sect_C.11.2>`
     * DICOM Standard, Part 3, :dcm:`Annex C.8.11.3.1.5
       <part03/sect_C.8.11.3.html#sect_C.8.11.3.1.5>`
+    * DICOM Standard, Part 3, :dcm:`Annex C.7.6.16.2.10
+      <part03/sect_C.7.6.16.2.html#sect_C.7.6.16.2.10>`
     * DICOM Standard, Part 4, :dcm:`Annex N.2.1.1
       <part04/sect_N.2.html#sect_N.2.1.1>`
     """
     top_voi = ds if _has_windowing(ds) else None
     top_rescale = _get_rescale_parameters(ds)
 
+    # Part 5, C.7.6.16.1.1: a single functional group shall not be included in both
+    #   Shared and Per-Frame Functional Groups Sequence
     shared = cast(list["Dataset"], ds.get("SharedFunctionalGroupsSequence", []))
     shared_group = shared[0] if shared else None
     shared_voi = (
@@ -999,80 +1029,100 @@ def apply_windowing(
     )
     if shared_voi is not None and not _has_windowing(shared_voi):
         shared_voi = None
+
     shared_rescale = (
         _get_functional_group_rescale(shared_group)
         if shared_group is not None
         else None
     )
 
+    # Part 5, C.7.6.16.1.1: If present, an empty item is still encoded for every frame
+    # If all frames are empty the sequence may or may not be omitted
     per_frame = cast(list["Dataset"], ds.get("PerFrameFunctionalGroupsSequence", []))
     frame_voi = [_get_functional_group_voi(group) for group in per_frame]
     frame_voi = [
         voi if voi is not None and _has_windowing(voi) else None for voi in frame_voi
     ]
-    frame_rescale = [_get_functional_group_rescale(group) for group in per_frame]
+    has_frame_voi = any(voi is not None for voi in frame_voi)
 
+    frame_rescale = [_get_functional_group_rescale(group) for group in per_frame]
+    has_frame_rescale = any(value is not None for value in frame_rescale)
+
+    # Check to see if we have a single and/or per-frame VOI to apply
     base_voi = top_voi or shared_voi
     base_rescale = top_rescale or shared_rescale
-    if base_voi is None and not any(voi is not None for voi in frame_voi):
+    if base_voi is None and not has_frame_voi:
         return arr
 
-    uses_per_frame = bool(per_frame) and (
-        (base_voi is None and any(voi is not None for voi in frame_voi))
-        or (base_rescale is None and any(value is not None for value in frame_rescale))
-    )
-
-    if slice_number is not None and per_frame:
+    # From this point we at least have a single and/or per-frame VOI
+    if frame_index is not None and per_frame:
         nr_frames = len(per_frame)
         declared_frames = ds.get("NumberOfFrames")
         if declared_frames is not None and int(declared_frames) != nr_frames:
             raise ValueError(
-                f"The number of frame functional groups ({nr_frames}) does not "
-                f"match the dataset's Number of Frames ({declared_frames})"
+                "The number of items in (5200,9230) 'Per Frame Functional Groups "
+                f"Sequence' ({nr_frames}) does not match the dataset's (0028,0008) "
+                f"'Number of Frames' ({declared_frames})"
             )
-        if slice_number < 0 or slice_number >= nr_frames:
+        if not 0 <= frame_index < nr_frames:
             raise IndexError(
-                f"The slice number ({slice_number}) is outside the available "
+                f"The frame index '{frame_index}' is outside the available "
                 f"frame range (0 to {nr_frames - 1})"
             )
 
-        voi = base_voi or frame_voi[slice_number]
+        # Use per-frame VOI (if available), fallback to single VOI (if available)
+        # The use of `frame_index` implies priority of per-frame over shared/top-level
+        voi = frame_voi[frame_index] or base_voi
         if voi is None:
             return arr
 
-        rescale = base_rescale or frame_rescale[slice_number]
+        rescale = frame_rescale[frame_index] or base_rescale
         return _apply_windowing(arr, ds, voi, index, rescale)
 
+    # Possible combinations:
+    # Shared/top-level VOI and rescale -> use shared/top-level only
+    # Shared/top-level VOI + per-frame rescale -> use mix
+    # Per-frame VOI and rescale -> use per-frame only
+    # Per-frame VOI + shared/top-level rescale -> use mix
+    uses_per_frame = bool(per_frame) and (
+        (base_voi is None and has_frame_voi)
+        or (base_rescale is None and has_frame_rescale)
+    )
     if not uses_per_frame:
+        # Use shared/top-level VOI/rescale only
         return _apply_windowing(arr, ds, cast("Dataset", base_voi), index, base_rescale)
 
+    # From this point we either have a mixed VOI/rescale or per-frame only VOI/rescale
     nr_frames = len(per_frame)
     declared_frames = ds.get("NumberOfFrames")
     if declared_frames is not None and int(declared_frames) != nr_frames:
         raise ValueError(
-            f"The number of frame functional groups ({nr_frames}) does not "
-            f"match the dataset's Number of Frames ({declared_frames})"
+            "The number of items in (5200,9230) 'Per Frame Functional Groups "
+            f"Sequence' ({nr_frames}) does not match the dataset's (0028,0008) "
+            f"'Number of Frames' ({declared_frames})"
         )
 
     if nr_frames > 1:
         arr_frames = arr.shape[0] if arr.ndim >= 3 else 1
         if nr_frames != arr_frames:
             raise ValueError(
-                f"The number of frame functional groups ({nr_frames}) does not "
-                f"match the number of frames in the array ({arr_frames})"
+                "The number of items in (5200,9230) 'Per Frame Functional Groups "
+                f"Sequence' ({nr_frames}) does not match the number of frames in "
+                f"the array ({arr_frames})"
             )
 
+    # Prefer the per-frame VOI and rescale over the shared/top-level
     if nr_frames == 1:
-        voi = cast("Dataset", base_voi or frame_voi[0])
-        return _apply_windowing(arr, ds, voi, index, base_rescale or frame_rescale[0])
+        voi = cast("Dataset", frame_voi[0] or base_voi)
+        return _apply_windowing(arr, ds, voi, index, frame_rescale[0] or base_rescale)
 
     out = arr.astype("float64")
     for frame_number in range(nr_frames):
-        voi = base_voi or frame_voi[frame_number]
+        voi = frame_voi[frame_number] or base_voi
         if voi is None:
             continue
 
-        rescale = base_rescale or frame_rescale[frame_number]
+        rescale = frame_rescale[frame_number] or base_rescale
         out[frame_number] = _apply_windowing(arr[frame_number], ds, voi, index, rescale)
 
     return out
@@ -1591,3 +1641,44 @@ def _expand_segmented_lut(
             return lut
 
     return lut
+
+
+def _get_functional_group_rescale(group: "Dataset") -> tuple[float, float] | None:
+    """Return rescale parameters from a Pixel Value Transformation macro."""
+    # Part 3, C.7.6.16.2.9
+    # Only a single item shall be included in the sequence
+    sequence = group.get("PixelValueTransformationSequence")
+    if not sequence:
+        return None
+
+    item = cast(list["Dataset"], sequence)[0]
+    return _get_rescale_parameters(item)
+
+
+def _get_functional_group_voi(group: "Dataset") -> "Dataset | None":
+    """Return the Frame VOI LUT macro item in `group`, if present."""
+    # Part 3, C.7.6.16.2.10
+    # Only a single item shall be included in the sequence
+    sequence = group.get("FrameVOILUTSequence")
+    if not sequence:
+        return None
+
+    return cast(list["Dataset"], sequence)[0]
+
+
+def _get_rescale_parameters(ds: "Dataset") -> tuple[float, float] | None:
+    """Return the rescale slope and intercept in `ds`, if present."""
+    slope = ds.get("RescaleSlope", None)
+    intercept = ds.get("RescaleIntercept", None)
+    if slope is not None and intercept is not None:
+        return cast(float, slope), cast(float, intercept)
+
+    return None
+
+
+def _has_windowing(ds: "Dataset") -> bool:
+    """Return ``True`` if `ds` contains valid windowing parameters."""
+    return None not in [
+        ds.get("WindowCenter", None),
+        ds.get("WindowWidth", None),
+    ]
